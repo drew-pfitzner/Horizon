@@ -50,6 +50,10 @@ export const Valuation = {
         if (p[k] === "" || p[k] == null) p[k] = null;
         else p[k] = Number(p[k]);
       });
+      // Convert payout from % input (e.g. 27) to decimal (0.27) for the API
+      for (const k of PAYOUT_KEYS) {
+        if (p[k] != null) p[k] = p[k] / 100;
+      }
       p.ticker = (p.ticker || "").toUpperCase();
       return p;
     },
@@ -92,7 +96,8 @@ export const Valuation = {
         next.total_equity_m = data.total_equity_m;
         next.shares_outstanding_m = data.shares_outstanding_m;
         for (const k of ROE_KEYS) next[k] = data[k] ?? null;
-        for (const k of PAYOUT_KEYS) next[k] = data[k] ?? null;
+        // DB stores payout as decimal; convert to % for display
+        for (const k of PAYOUT_KEYS) next[k] = data[k] != null ? data[k] * 100 : null;
         this.form = next;
       } catch (e) { console.error(e); }
     },
@@ -155,27 +160,27 @@ export const Valuation = {
           </div>
 
           <h3 style="margin-top: 1rem;">Dividend Payout Ratio (5 years)</h3>
-          <p class="text-muted" style="margin: -0.25rem 0 0.5rem;">As decimals: 0 = no dividend, 0.30 = 30% paid out.</p>
+          <p class="text-muted" style="margin: -0.25rem 0 0.5rem;">As percentages: 0 = no dividend, 30 = 30% paid out.</p>
           <div class="grid-5">
             <div class="field">
               <label>Year 1</label>
-              <input type="number" step="0.01" v-model.number="form.payout1">
+              <input type="number" step="0.1" v-model.number="form.payout1" placeholder="%">
             </div>
             <div class="field">
               <label>Year 2</label>
-              <input type="number" step="0.01" v-model.number="form.payout2">
+              <input type="number" step="0.1" v-model.number="form.payout2" placeholder="%">
             </div>
             <div class="field">
               <label>Year 3</label>
-              <input type="number" step="0.01" v-model.number="form.payout3">
+              <input type="number" step="0.1" v-model.number="form.payout3" placeholder="%">
             </div>
             <div class="field">
               <label>Year 4</label>
-              <input type="number" step="0.01" v-model.number="form.payout4">
+              <input type="number" step="0.1" v-model.number="form.payout4" placeholder="%">
             </div>
             <div class="field">
               <label>Year 5</label>
-              <input type="number" step="0.01" v-model.number="form.payout5">
+              <input type="number" step="0.1" v-model.number="form.payout5" placeholder="%">
             </div>
           </div>
 
@@ -222,7 +227,7 @@ export const Valuation = {
               </div>
             </div>
 
-            <table class="table" style="margin-top: 1rem;">
+            <div class="table-wrap" style="margin-top: 1rem;"><table class="table">
               <thead>
                 <tr><th></th><th class="num">Average</th><th class="num">Median</th><th class="num">MOS (10% disc)</th></tr>
               </thead>
@@ -270,7 +275,7 @@ export const Valuation = {
                   </td>
                 </tr>
               </tbody>
-            </table>
+            </table></div>
           </div>
         </div>
       </div>

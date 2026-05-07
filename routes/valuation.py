@@ -49,6 +49,7 @@ def calculate(p):
     total_eq = float(p.get("total_equity_m") or 0)
     shares = float(p.get("shares_outstanding_m") or 0)
     current = float(p.get("current_price") or 0)
+    required = float(p.get("required_return") or 10)
     if shares <= 0:
         return None, "shares outstanding required"
 
@@ -64,7 +65,9 @@ def calculate(p):
     else:
         payout_avg = 0.0
         payout_med = 0.0
-    payout_mos = payout_med * 0.90
+    # MOS applies 10% discount to ROE only; payout is unchanged so
+    # distributed and reinvested each naturally discount by 10% too.
+    payout_mos = payout_med
 
     def distrib(roe, payout):
         return roe * payout
@@ -72,8 +75,10 @@ def calculate(p):
     def reinv(roe, payout):
         return roe * (1.0 - payout)
 
-    def mult(reinvested):
-        return (reinvested ** 2) / 100.0
+    def mult(reinvested, distributed):
+        r = reinvested / required
+        d = distributed / required
+        return r * r + d * (1.0 + r)
 
     def disc(v):
         return ((v - current) / v * 100) if v else 0.0
@@ -86,7 +91,7 @@ def calculate(p):
     ):
         d = distrib(roe, payout)
         r = reinv(roe, payout)
-        m = mult(r)
+        m = mult(r, d)
         v = eps_book * m
         cols[name] = {
             "roe": roe, "payout": payout,
