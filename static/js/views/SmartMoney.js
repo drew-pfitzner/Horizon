@@ -16,7 +16,7 @@ export const SmartMoney = {
     };
   },
   async mounted() {
-    try { this.gurus = await get("/api/smart-money/gurus"); } catch (e) { console.error(e); }
+    try { this.gurus = await get("/api/smart-money/gurus") || []; } catch (e) { console.error(e); this.gurus = []; }
     this.loadTop();
   },
   methods: {
@@ -72,7 +72,7 @@ export const SmartMoney = {
               <span class="text-muted">— Quarter {{ tickerResult.quarter || 'N/A' }}</span>
             </h3>
             <div v-if="tickerResult.holders.length || tickerResult.exited.length">
-              <table class="table">
+              <div class="table-wrap"><table class="table">
                 <thead>
                   <tr>
                     <th>Guru</th><th>Firm</th>
@@ -103,7 +103,7 @@ export const SmartMoney = {
                     <td><span class="text-red">Exited</span></td>
                   </tr>
                 </tbody>
-              </table>
+              </table></div>
             </div>
             <div class="empty" v-else>No gurus hold {{ tickerResult.ticker }} this quarter.</div>
           </div>
@@ -127,7 +127,7 @@ export const SmartMoney = {
               {{ guruResult.guru.name }}
               <span class="text-muted">— {{ guruResult.guru.firm }} · Quarter {{ guruResult.quarter || 'N/A' }}</span>
             </h3>
-            <table class="table" v-if="guruResult.holdings.length">
+            <div class="table-wrap"><table class="table" v-if="guruResult.holdings.length">
               <thead>
                 <tr>
                   <th>Ticker</th><th>Issuer</th>
@@ -147,7 +147,7 @@ export const SmartMoney = {
                   <td><span :class="statusClass(h.status)">{{ h.status }}</span></td>
                 </tr>
               </tbody>
-            </table>
+            </table></div>
             <div class="empty" v-else>No holdings found.</div>
           </div>
           <div class="empty" v-else-if="guruQuery">Type a guru name and press Enter.</div>
@@ -158,7 +158,7 @@ export const SmartMoney = {
         <div class="card">
           <h3 v-if="top && top.quarter">Top Holdings — Quarter {{ top.quarter }}</h3>
           <div class="loading" v-if="topLoading">Loading...</div>
-          <table class="table" v-else-if="top && top.holdings.length">
+          <div class="table-wrap" v-else-if="top && top.holdings.length"><table class="table">
             <thead>
               <tr>
                 <th>Ticker</th><th>Issuer</th>
@@ -178,7 +178,7 @@ export const SmartMoney = {
                 </td>
               </tr>
             </tbody>
-          </table>
+          </table></div>
           <div class="empty" v-else>No data available.</div>
         </div>
       </div>

@@ -26,6 +26,7 @@ export const Settings = {
       } catch (e) {
         this.message = `Error loading: ${e.message}`;
         this.messageClass = "text-red";
+        this.thresholds = null;
       }
     },
     async save() {
@@ -74,7 +75,7 @@ export const Settings = {
           Each indicator scores 1 (LOW), 2 (MED), or 3 (HIGH). The worst score
           across the four sets the position size — LOW = 2%, MED = 1.5%, HIGH = 1%.
         </p>
-        <table class="table">
+        <div class="table-wrap"><table class="table">
           <thead>
             <tr>
               <th>Indicator</th>
@@ -95,7 +96,7 @@ export const Settings = {
               <td class="text-muted" v-html="ind.hint"></td>
             </tr>
           </tbody>
-        </table>
+        </table></div>
         <div class="toolbar">
           <button class="btn-primary" :disabled="saving" @click="save">
             {{ saving ? "Saving..." : "Save Thresholds" }}
