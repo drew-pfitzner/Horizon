@@ -12,6 +12,7 @@ from datetime import datetime
 from collections import deque
 
 from config import SMART_MONEY_DIR
+from db import get_setting
 
 _MAX_LOG_LINES = 200
 
@@ -76,6 +77,10 @@ def _run():
 
         env = os.environ.copy()
         env.setdefault("PYTHONUNBUFFERED", "1")
+
+        sec_identity = get_setting("sec_identity", "")
+        if sec_identity:
+            env["SEC_IDENTITY"] = sec_identity
 
         venv_py = SMART_MONEY_DIR / "venv" / "bin" / "python"
         py = str(venv_py) if venv_py.exists() else sys.executable

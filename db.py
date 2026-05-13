@@ -11,6 +11,7 @@ DEFAULT_SETTINGS = {
         "s5fi": {"low": 40, "mid": 70},
         "fear_greed": {"low": 45, "mid": 55},
     },
+    "sec_identity": "",
 }
 
 

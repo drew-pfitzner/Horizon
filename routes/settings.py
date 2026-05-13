@@ -37,3 +37,17 @@ def reset_pullback():
     defaults = DEFAULT_SETTINGS["pullback_thresholds"]
     set_setting("pullback_thresholds", defaults)
     return jsonify({"success": True, "data": defaults})
+
+
+@bp.route("/sec-identity", methods=["GET"])
+def get_sec_identity():
+    email = get_setting("sec_identity", DEFAULT_SETTINGS["sec_identity"])
+    return jsonify({"success": True, "data": email})
+
+
+@bp.route("/sec-identity", methods=["PUT"])
+def put_sec_identity():
+    p = request.get_json(force=True)
+    email = p.get("email", "").strip()
+    set_setting("sec_identity", email)
+    return jsonify({"success": True, "data": email})

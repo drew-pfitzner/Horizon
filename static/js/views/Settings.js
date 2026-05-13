@@ -11,9 +11,13 @@ export const Settings = {
   data() {
     return {
       thresholds: null,
+      secIdentity: "",
       saving: false,
+      savingSec: false,
       message: null,
       messageClass: "",
+      secMessage: null,
+      secMessageClass: "",
       backupMessage: null,
       backupMessageClass: "",
       importing: false,
@@ -29,6 +33,7 @@ export const Settings = {
     async load() {
       try {
         this.thresholds = await get("/api/settings/pullback-thresholds");
+        this.secIdentity = await get("/api/settings/sec-identity");
       } catch (e) {
         this.message = `Error loading: ${e.message}`;
         this.messageClass = "text-red";
@@ -53,6 +58,21 @@ export const Settings = {
       } finally {
         this.saving = false;
         setTimeout(() => { this.message = null; }, 3000);
+      }
+    },
+    async saveSec() {
+      this.savingSec = true;
+      this.secMessage = null;
+      try {
+        await put("/api/settings/sec-identity", { email: this.secIdentity });
+        this.secMessage = "Saved";
+        this.secMessageClass = "text-green";
+      } catch (e) {
+        this.secMessage = `Error: ${e.message}`;
+        this.secMessageClass = "text-red";
+      } finally {
+        this.savingSec = false;
+        setTimeout(() => { this.secMessage = null; }, 3000);
       }
     },
     async exportBackup() {
@@ -211,6 +231,23 @@ export const Settings = {
           </button>
           <button class="btn-ghost" @click="resetDefaults">Reset to Defaults</button>
           <span :class="messageClass">{{ message }}</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>SEC Identity (Smart Money Updates)</h3>
+        <p class="text-muted">
+          Provide your email address for SEC Edgar access. This is required to update the smart money guru holdings database.
+        </p>
+        <div style="margin-bottom: 1rem;">
+          <label>Email Address</label>
+          <input type="email" v-model="secIdentity" placeholder="your.email@example.com" style="width: 100%; max-width: 300px;">
+        </div>
+        <div class="toolbar">
+          <button class="btn-primary" :disabled="savingSec" @click="saveSec">
+            {{ savingSec ? "Saving..." : "Save SEC Email" }}
+          </button>
+          <span :class="secMessageClass">{{ secMessage }}</span>
         </div>
       </div>
 
