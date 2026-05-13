@@ -29,7 +29,10 @@ def save_settings(settings: dict) -> None:
 
 
 def get_sec_identity() -> str | None:
-    """Get the SEC identity email from settings. Returns None if not configured."""
+    """Get the SEC identity email from env var or settings. Returns None if not configured."""
+    env_identity = os.environ.get("SEC_IDENTITY", "").strip()
+    if env_identity:
+        return env_identity
     return load_settings().get("sec_identity")
 
 
