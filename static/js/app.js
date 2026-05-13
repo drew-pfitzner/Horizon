@@ -27,7 +27,7 @@ const router = createRouter({
 
 const app = createApp({
   data() {
-    return { gate: null };
+    return { gate: null, mobileMenuOpen: false };
   },
   computed: {
     gateClass() {

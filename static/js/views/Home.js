@@ -91,6 +91,33 @@ export const Home = {
           <div><span class="text-muted">Fear/Greed:</span> {{ gate.fear_greed }}</div>
         </div>
       </div>
+
+      <div class="grid-2">
+        <div class="card trade-rule-card">
+          <h3 style="color: var(--green);">Buy Technicals</h3>
+          <ul class="rule-list">
+            <li>RSI &lt; 35 <span class="text-muted">(preferably &lt; 30)</span></li>
+            <li>RSI ticking up</li>
+            <li>STO Fast &lt; 20</li>
+            <li>STO Crossover: Fast over Slow</li>
+          </ul>
+        </div>
+
+        <div class="card trade-rule-card">
+          <h3 style="color: var(--red);">Sell Technicals</h3>
+          <ul class="rule-list">
+            <li>RSI &gt; 70 then cross below 70</li>
+            <li>STO Fast &gt; 80</li>
+            <li>STO Crossover: Slow over Fast</li>
+          </ul>
+          <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+            <div style="font-size: 0.85rem; color: var(--text-2); margin-bottom: 0.4rem; font-weight: 600;">Risk Management</div>
+            <ul class="rule-list" style="margin-bottom: 0;">
+              <li>Stop Loss &gt; 7% from Buy Price</li>
+            </ul>
+          </div>
+        </div>
+      </div>
     </div>
   `,
 };

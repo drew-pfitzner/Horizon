@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:localhost)",
+      "Bash(curl -s http://localhost:5001)",
+      "Bash(curl -X POST http://localhost:5001/api/valuation/preview -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(python -m json.tool)",
+      "Bash(node -c /Users/drewpfitzner/Documents/Projects/Claude_Projects/Horizon/static/js/views/Valuation.js)",
+      "Bash(open \"http://localhost:5001/#/valuation\")",
+      "Bash(curl -s http://localhost:5000)",
+      "Bash(curl -v http://localhost:5000)",
+      "Bash(curl -s \"http://localhost:5001/api/research\")",
+      "Bash(curl -s \"http://localhost:5001/api/valuation/CTSH\")",
+      "Bash(curl -s -X POST http://localhost:5001/api/valuation/preview -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s -X POST http://localhost:5001/api/valuation -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(node --input-type=module)",
+      "Bash(python *)",
+      "Bash(curl -s --connect-timeout 2 http://localhost:5000)",
+      "Bash(pkill *)",
+      "Bash(curl -I http://localhost:5000)",
+      "Bash(curl -s http://localhost:5001/api/smart-money/gurus)",
+      "Bash(curl *)",
+      "Bash(awk 'NR>1 {print $2}')",
+      "Bash(xargs kill *)",
+      "Bash(sqlite3 *)",
+      "Bash(chmod +x *)"
+    ]
+  }
+}

@@ -15,8 +15,7 @@ export const Valuation = {
       form: this._initForm(),
       result: null,
       saving: false,
-      message: null,
-      messageClass: "",
+      saveError: null,
     };
   },
   computed: {
@@ -55,7 +54,17 @@ export const Valuation = {
         if (p[k] != null) p[k] = p[k] / 100;
       }
       p.ticker = (p.ticker || "").toUpperCase();
+      const rid = this.$route?.query?.from_research;
+      if (rid) p.research_id = Number(rid);
       return p;
+    },
+    backToResearch() {
+      const rid = this.$route?.query?.from_research;
+      if (rid) {
+        this.$router.push(`/research/${rid}`);
+      } else {
+        this.$router.push("/research");
+      }
     },
     async recompute() {
       if (!this.canCompute) { this.result = null; return; }
@@ -65,21 +74,17 @@ export const Valuation = {
         this.result = null;
       }
     },
-    async save() {
+    async saveAndReturn() {
       if (!this.canSave) return;
       this.saving = true;
-      this.message = null;
+      this.saveError = null;
       try {
-        const data = await post("/api/valuation", this.payload());
-        this.result = data;
-        this.message = "Saved";
-        this.messageClass = "text-green";
+        await post("/api/valuation", this.payload());
+        this.backToResearch();
       } catch (e) {
-        this.message = `Error: ${e.message}`;
-        this.messageClass = "text-red";
+        this.saveError = e.message;
       } finally {
         this.saving = false;
-        setTimeout(() => { this.message = null; }, 3000);
       }
     },
     async loadLatest() {
@@ -111,7 +116,15 @@ export const Valuation = {
   },
   template: `
     <div>
-      <h1>Equity Multiple Valuation</h1>
+      <div class="toolbar">
+        <h1 style="margin: 0;">Equity Multiple Valuation</h1>
+        <div class="spacer"></div>
+        <span v-if="saveError" class="text-red" style="font-size: 0.85rem; margin-right: 0.5rem;">{{ saveError }}</span>
+        <button class="btn-primary" :disabled="!canSave || saving" @click="saveAndReturn">
+          {{ saving ? 'Saving…' : 'Save & Return' }}
+        </button>
+        <button @click="backToResearch()" style="margin-left: 0.5rem;">Cancel</button>
+      </div>
 
       <div class="grid-2">
         <div class="card">
@@ -198,13 +211,6 @@ export const Valuation = {
               <label>Shares Outstanding (M)</label>
               <input type="number" step="0.01" v-model.number="form.shares_outstanding_m">
             </div>
-          </div>
-
-          <div class="toolbar">
-            <button class="btn-primary" :disabled="!canSave || saving" @click="save">
-              {{ saving ? "Saving..." : "Save Valuation" }}
-            </button>
-            <span :class="messageClass">{{ message }}</span>
           </div>
         </div>
 

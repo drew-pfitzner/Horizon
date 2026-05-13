@@ -163,6 +163,7 @@ def save():
                 roe1, roe2, roe3, roe4, roe5,
                 payout1, payout2, payout3, payout4, payout5,
                 required_return, total_equity_m, shares_outstanding_m,
+                net_profit_margin, smart_money_holding,
                 equity_per_share,
                 roe_avg, roe_median, roe_mos,
                 payout_avg, payout_median, payout_mos,
@@ -174,13 +175,14 @@ def save():
                 assessment, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                      ?, ?, ?, ?, ?)
+                      ?, ?, ?, ?, ?, ?, ?)
         """, (
             ticker, p.get("company_name") or "", vdate, p.get("current_price"),
             p.get("roe1"), p.get("roe2"), p.get("roe3"), p.get("roe4"), p.get("roe5"),
             p.get("payout1"), p.get("payout2"), p.get("payout3"), p.get("payout4"), p.get("payout5"),
             p.get("required_return") or 10.0,
             p.get("total_equity_m"), p.get("shares_outstanding_m"),
+            p.get("net_profit_margin"), p.get("smart_money_holding"),
             result["equity_per_share"],
             result["roe_avg"], result["roe_median"], result["roe_mos"],
             result["payout_avg"], result["payout_median"], result["payout_mos"],

@@ -1,7 +1,21 @@
 from flask import Blueprint, request, jsonify
 from db import get_sm_db
+import sm_job
 
 bp = Blueprint("smart_money", __name__)
+
+
+@bp.route("/update", methods=["POST"])
+def start_update():
+    started = sm_job.start()
+    if not started:
+        return jsonify({"success": False, "error": "update already running"}), 409
+    return jsonify({"success": True, "data": sm_job.get_state()})
+
+
+@bp.route("/update/status", methods=["GET"])
+def update_status():
+    return jsonify({"success": True, "data": sm_job.get_state()})
 
 
 def _classify(curr_shares, prev_shares, curr_weight, prev_weight):

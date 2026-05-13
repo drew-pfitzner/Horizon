@@ -33,3 +33,6 @@ node_modules/
 dist/
 build/
 *.egg-info/
+
+# Docker runtime data (horizon.db + smart_money.db live here)
+data/

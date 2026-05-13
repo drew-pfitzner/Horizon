@@ -1,4 +1,4 @@
-import { get, put, post } from "../utils.js";
+import { get, put, post, api } from "../utils.js";
 
 const INDICATORS = [
   { key: "rsi",        label: "RSI",                hint: "≤ low = LOW position size · &lt; mid = MED · ≥ mid = HIGH" },
@@ -14,6 +14,9 @@ export const Settings = {
       saving: false,
       message: null,
       messageClass: "",
+      backupMessage: null,
+      backupMessageClass: "",
+      importing: false,
     };
   },
   async mounted() {
@@ -47,6 +50,57 @@ export const Settings = {
       } finally {
         this.saving = false;
         setTimeout(() => { this.message = null; }, 3000);
+      }
+    },
+    async exportBackup() {
+      this.backupMessage = null;
+      try {
+        const r = await fetch("/api/backup/export");
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const cd = r.headers.get("Content-Disposition") || "";
+        const m = cd.match(/filename=([^;]+)/);
+        a.href = url;
+        a.download = m ? m[1].trim() : `horizon_backup.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        this.backupMessage = "Backup downloaded";
+        this.backupMessageClass = "text-green";
+      } catch (e) {
+        this.backupMessage = `Error: ${e.message}`;
+        this.backupMessageClass = "text-red";
+      } finally {
+        setTimeout(() => { this.backupMessage = null; }, 4000);
+      }
+    },
+    triggerImport() {
+      this.$refs.importFile.click();
+    },
+    async importBackup(event) {
+      const file = event.target.files && event.target.files[0];
+      event.target.value = "";
+      if (!file) return;
+      if (!confirm("This will OVERWRITE all current Horizon data with the contents of the backup. Continue?")) return;
+      this.importing = true;
+      this.backupMessage = null;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        const result = await api("POST", "/api/backup/import", data);
+        const counts = result.imported || {};
+        const total = Object.values(counts).reduce((a, b) => a + b, 0);
+        this.backupMessage = `Imported ${total} rows. Reloading...`;
+        this.backupMessageClass = "text-green";
+        setTimeout(() => { window.location.reload(); }, 1200);
+      } catch (e) {
+        this.backupMessage = `Import failed: ${e.message}`;
+        this.backupMessageClass = "text-red";
+      } finally {
+        this.importing = false;
       }
     },
     async resetDefaults() {
@@ -113,6 +167,22 @@ export const Settings = {
           any red → NO TRADE; any orange (no red) → CAUTION; otherwise OK.
           These thresholds are not adjustable.
         </p>
+      </div>
+
+      <div class="card">
+        <h3>Data Backup</h3>
+        <p class="text-muted">
+          Export a full JSON backup of all Horizon data (market checks, valuations, research, trades, settings).
+          Run before updates so you can restore if anything goes wrong.
+        </p>
+        <div class="toolbar">
+          <button class="btn-primary" @click="exportBackup">Export Backup</button>
+          <button class="btn-ghost" :disabled="importing" @click="triggerImport">
+            {{ importing ? "Importing..." : "Import Backup" }}
+          </button>
+          <input type="file" accept="application/json,.json" ref="importFile" @change="importBackup" style="display:none;">
+          <span :class="backupMessageClass">{{ backupMessage }}</span>
+        </div>
       </div>
     </div>
   `,

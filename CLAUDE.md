@@ -4,15 +4,30 @@ Local web app for consolidated research, valuation, trading, and smart money tra
 
 ## Quick Start
 
+**Local development (Mac/Linux):**
 ```bash
-cd /Users/drewpfitzner/Documents/Projects/Claude_Projects/Horizon
+cd Horizon
 source venv/bin/activate
 python app.py
+# Open http://localhost:5001
 ```
 
-Then open http://localhost:5000 in your browser.
+**Docker (Mac/Linux/Windows):**
+```bash
+cd Horizon
+bash install.sh          # First time: builds image, starts container
+# Open http://localhost:5001
+bash update.sh           # After code changes: rebuild + restart
+```
 
-**Via Tailscale**: Once running, access from iPhone via your Tailscale IP (e.g., http://100.xx.x.xx:5000).
+**Windows Docker:**
+```powershell
+cd Horizon
+.\Install-Horizon.ps1    # First time
+.\Update-Horizon.ps1     # After updates
+```
+
+**Via Tailscale**: Once running, access from any device via your Tailscale IP (e.g., http://100.xx.x.xx:5001).
 
 ---
 
@@ -101,6 +116,42 @@ Then open http://localhost:5000 in your browser.
 - ✅ Valuation calculator with correct equity multiplier formula, payout as %, MOS logic
 - ✅ Smart money integration (queries 118 gurus, 13F holdings)
 - ✅ Mobile layout fixed (topbar scrolls, tables don't overflow)
+- ✅ **Docker deployment** — one-command install (`install.sh` / `Install-Horizon.ps1`), auto-restart on crash/reboot
+- ✅ **Data backup/restore** — Settings tab → Export/Import JSON (full round-trip tested)
+- ✅ **Background smart money refresh** — Smart Money tab → "Update Data (SEC 13F)" button, streams progress, auto-refresh on done
+
+## Development Workflow
+
+**Quick iteration (local venv):**
+```bash
+source venv/bin/activate
+python app.py
+# Edit code → browser refresh (auto-reload on debug=True)
+# Static assets (.js/.css) reload instantly
+```
+
+**Production (Docker):**
+```bash
+git add . && git commit -m "msg"
+bash update.sh           # Rebuilds image, restarts container, ./data/ preserved
+# Or on Windows: .\Update-Horizon.ps1
+```
+
+**Inspect container:**
+```bash
+docker compose logs -f          # Stream logs
+docker compose exec horizon bash # Shell into running container
+docker compose down             # Stop
+```
+
+**Share with others:** Push to repo, they run `install.sh` or `Install-Horizon.ps1` on their machine.
+
+## Implementation Notes
+
+- **Background jobs:** `sm_job.py` spawns `python cli.py update` in a thread, streams stdout to a ring buffer (max 200 lines), exposed via `/api/smart-money/update/status`
+- **Data paths:** All DB/config paths accept env vars (`HORIZON_DB_PATH`, `SMART_MONEY_DB_PATH`, `SMART_MONEY_DIR`) for flexibility between dev/Docker
+- **Docker context:** Build context is parent dir (so both `Horizon/` and `smart_money/` get copied in); smart_money ETL runs as subprocess
+- **Flask debug:** Set `FLASK_DEBUG=0` in Docker so auto-reloader doesn't kill background threads; defaults to `1` (true) locally
 
 ## Maintenance Notes
 

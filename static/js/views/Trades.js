@@ -63,10 +63,6 @@ export const Trades = {
     },
     openNew() { this.modalMode = "new"; this.form = this._emptyTrade(); },
     openEdit(t) { this.modalMode = "edit"; this.form = { ...this._emptyTrade(), ...t }; },
-    openExit(t) {
-      this.modalMode = "exit";
-      this.form = { ...this._emptyTrade(), ...t, exit_date: t.exit_date || isoToday() };
-    },
     closeModal() { this.modalMode = null; this.message = null; },
     payload() {
       const p = { ...this.form };
@@ -137,7 +133,7 @@ export const Trades = {
 
       <div v-if="tab === 'log'">
         <div class="card" v-if="sortedTrades.length">
-          <table class="table">
+          <div class="table-wrap"><table class="table">
             <thead>
               <tr>
                 <th>Ticker</th><th>Strat</th><th>Cur</th>
@@ -168,12 +164,11 @@ export const Trades = {
                 </td>
                 <td><span :class="winLossClass(t.win_loss)">{{ t.win_loss || 'HOLD' }}</span></td>
                 <td>
-                  <button v-if="!t.exit_date" class="btn-ghost" @click.stop="openExit(t)" title="Log exit">↗</button>
                   <button class="btn-danger" @click.stop="askDelete(t)" title="Delete">Delete</button>
                 </td>
               </tr>
             </tbody>
-          </table>
+          </table></div>
         </div>
         <div class="empty" v-else>No trades yet. Click "+ Log Trade" to start.</div>
       </div>
@@ -207,7 +202,7 @@ export const Trades = {
           </div>
 
           <h3 style="margin-top: 1rem;">{{ perf.year }} by Month</h3>
-          <table class="table">
+          <div class="table-wrap"><table class="table">
             <thead>
               <tr>
                 <th>Month</th><th class="num">Opened</th><th class="num">Closed</th>
@@ -230,7 +225,7 @@ export const Trades = {
                 </td>
               </tr>
             </tbody>
-          </table>
+          </table></div>
         </div>
       </div>
 

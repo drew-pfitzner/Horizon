@@ -1,4 +1,4 @@
-import { get, fmtMoney, fmtNum, statusClass } from "../utils.js";
+import { get, post, fmtMoney, fmtNum, statusClass } from "../utils.js";
 
 export const SmartMoney = {
   data() {
@@ -13,11 +13,20 @@ export const SmartMoney = {
       gurus: [],
       top: null,
       topLoading: false,
+      update: { status: "idle", output: [], started_at: null, finished_at: null, error: null },
+      updateStarting: false,
+      pollTimer: null,
+      showLog: false,
     };
   },
   async mounted() {
     try { this.gurus = await get("/api/smart-money/gurus") || []; } catch (e) { console.error(e); this.gurus = []; }
     this.loadTop();
+    await this.fetchUpdateStatus();
+    if (this.update.status === "running") this.startPolling();
+  },
+  beforeUnmount() {
+    this.stopPolling();
   },
   methods: {
     async searchTicker() {
@@ -46,10 +55,71 @@ export const SmartMoney = {
       this.guruQuery = name;
       this.searchGuru();
     },
+    async fetchUpdateStatus() {
+      try {
+        const s = await get("/api/smart-money/update/status");
+        const wasRunning = this.update.status === "running";
+        this.update = s;
+        if (wasRunning && s.status !== "running") {
+          this.stopPolling();
+          this.refreshActiveTab();
+        }
+      } catch (e) { console.error(e); }
+    },
+    startPolling() {
+      this.stopPolling();
+      this.pollTimer = setInterval(this.fetchUpdateStatus, 3000);
+    },
+    stopPolling() {
+      if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    },
+    async startUpdate() {
+      if (this.update.status === "running") return;
+      if (!confirm("Refresh smart money data from SEC? This can take several minutes.")) return;
+      this.updateStarting = true;
+      try {
+        const data = await post("/api/smart-money/update");
+        this.update = data;
+        this.showLog = true;
+        this.startPolling();
+      } catch (e) {
+        alert(`Failed to start update: ${e.message}`);
+      } finally {
+        this.updateStarting = false;
+      }
+    },
+    refreshActiveTab() {
+      if (this.tab === "top") this.loadTop();
+      else if (this.tab === "ticker" && this.tickerQuery) this.searchTicker();
+      else if (this.tab === "guru" && this.guruQuery) this.searchGuru();
+    },
+    updateStatusClass() {
+      const s = this.update.status;
+      if (s === "running") return "badge orange";
+      if (s === "done") return "badge green";
+      if (s === "error") return "badge red";
+      return "badge";
+    },
   },
   template: `
     <div>
       <h1>Smart Money</h1>
+
+      <div class="card">
+        <div class="toolbar">
+          <button class="btn-primary" @click="startUpdate" :disabled="update.status === 'running' || updateStarting">
+            {{ update.status === 'running' ? 'Updating...' : 'Update Data (SEC 13F)' }}
+          </button>
+          <span :class="updateStatusClass()">{{ update.status }}</span>
+          <span class="text-muted" v-if="update.started_at">started {{ update.started_at.replace('T',' ').slice(0,19) }}Z</span>
+          <span class="text-muted" v-if="update.finished_at && update.status !== 'running'">· finished {{ update.finished_at.replace('T',' ').slice(0,19) }}Z</span>
+          <button class="btn-ghost" @click="showLog = !showLog" v-if="update.output && update.output.length">
+            {{ showLog ? 'Hide log' : 'Show log' }} ({{ update.output.length }})
+          </button>
+        </div>
+        <pre v-if="showLog && update.output && update.output.length" style="max-height: 240px; overflow: auto; background: #0e1117; padding: 0.6rem; border-radius: 4px; font-size: 0.8rem; margin-top: 0.5rem;">{{ update.output.join('\\n') }}</pre>
+        <div v-if="update.error" class="text-red" style="margin-top: 0.4rem;">Error: {{ update.error }}</div>
+      </div>
 
       <div class="subtabs">
         <button :class="{ active: tab === 'ticker' }" @click="tab = 'ticker'">By Ticker</button>

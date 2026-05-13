@@ -1,0 +1,17 @@
+# Build context is the parent directory; ignore everything not needed.
+**/__pycache__
+**/*.pyc
+**/.git
+**/.venv
+**/venv
+**/node_modules
+**/.DS_Store
+**/horizon.db
+**/horizon.db-wal
+**/horizon.db-shm
+**/smart_money.db-wal
+**/smart_money.db-shm
+**/data
+Horizon/research_materials
+smart_money/build
+smart_money/*.egg-info

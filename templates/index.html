@@ -17,13 +17,14 @@
         <span class="brand-mark">●</span>
         <router-link to="/" class="brand-text">Horizon</router-link>
       </div>
-      <nav class="nav">
-        <router-link to="/" exact-active-class="active">Home</router-link>
-        <router-link to="/market-check" active-class="active">Market</router-link>
-        <router-link to="/research" active-class="active">Research</router-link>
-        <router-link to="/trades" active-class="active">Trades</router-link>
-        <router-link to="/smart-money" active-class="active">Smart Money</router-link>
-        <router-link to="/settings" active-class="active">Settings</router-link>
+      <button class="hamburger" @click="mobileMenuOpen = !mobileMenuOpen">☰</button>
+      <nav class="nav" :class="{ 'mobile-open': mobileMenuOpen }">
+        <router-link to="/" exact-active-class="active" @click="mobileMenuOpen = false">Home</router-link>
+        <router-link to="/market-check" active-class="active" @click="mobileMenuOpen = false">Market</router-link>
+        <router-link to="/research" active-class="active" @click="mobileMenuOpen = false">Research</router-link>
+        <router-link to="/trades" active-class="active" @click="mobileMenuOpen = false">Trades</router-link>
+        <router-link to="/smart-money" active-class="active" @click="mobileMenuOpen = false">Smart Money</router-link>
+        <router-link to="/settings" active-class="active" @click="mobileMenuOpen = false">Settings</router-link>
       </nav>
       <div class="gate" :class="gateClass" v-if="gate">
         <span class="dot"></span>

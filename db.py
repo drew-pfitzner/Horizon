@@ -44,6 +44,8 @@ def init_db():
                 required_return REAL DEFAULT 10.0,
                 total_equity_m REAL,
                 shares_outstanding_m REAL,
+                net_profit_margin REAL,
+                smart_money_holding REAL,
                 equity_per_share REAL,
                 roe_avg REAL, roe_median REAL, roe_mos REAL,
                 payout_avg REAL, payout_median REAL, payout_mos REAL,

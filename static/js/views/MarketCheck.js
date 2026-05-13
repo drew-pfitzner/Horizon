@@ -257,7 +257,7 @@ export const MarketCheck = {
 
       <div class="card">
         <h3>History (last 14)</h3>
-        <table class="table" v-if="history.length">
+        <div class="table-wrap" v-if="history.length"><table class="table">
           <thead>
             <tr>
               <th>Date</th><th>STL</th><th>VIX</th><th>RSI</th><th>STO</th><th>S5FI</th><th>F/G</th>
@@ -278,7 +278,7 @@ export const MarketCheck = {
               <td><button class="btn-danger" @click.stop="askDelete(row)">Delete</button></td>
             </tr>
           </tbody>
-        </table>
+        </table></div>
         <div class="empty" v-else>No history yet — save your first check above.</div>
       </div>
 
