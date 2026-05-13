@@ -77,9 +77,12 @@ def _run():
         env = os.environ.copy()
         env.setdefault("PYTHONUNBUFFERED", "1")
 
-        _append(f"$ python cli.py update  (cwd={SMART_MONEY_DIR})")
+        venv_py = SMART_MONEY_DIR / "venv" / "bin" / "python"
+        py = str(venv_py) if venv_py.exists() else sys.executable
+
+        _append(f"$ {py} cli.py update  (cwd={SMART_MONEY_DIR})")
         proc = subprocess.Popen(
-            [sys.executable, "cli.py", "update"],
+            [py, "cli.py", "update"],
             cwd=str(SMART_MONEY_DIR),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

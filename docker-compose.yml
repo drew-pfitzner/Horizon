@@ -1,8 +1,8 @@
 services:
   horizon:
     build:
-      context: ..
-      dockerfile: Horizon/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     image: horizon:latest
     container_name: horizon
     ports:
@@ -15,5 +15,5 @@ services:
       - SMART_MONEY_DIR=/app/smart_money
       - SMART_MONEY_DB_PATH=/app/data/smart_money.db
       - HORIZON_DB_PATH=/app/data/horizon.db
-      - SEC_IDENTITY=${SEC_IDENTITY:-drew.pfitzner@gmail.com}
+      - SEC_IDENTITY=${SEC_IDENTITY:-}
     restart: unless-stopped

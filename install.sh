@@ -16,23 +16,7 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ ! -d "../smart_money" ]; then
-  echo "ERROR: ../smart_money not found. Horizon expects the smart_money project"
-  echo "as a sibling directory (../smart_money) so it can be bundled into the image."
-  exit 1
-fi
-
 mkdir -p data
-
-# Seed existing DBs into the volume mount if present and not yet copied.
-if [ -f horizon.db ] && [ ! -f data/horizon.db ]; then
-  echo "Copying existing horizon.db into ./data/"
-  cp horizon.db data/horizon.db
-fi
-if [ -f ../smart_money/data/smart_money.db ] && [ ! -f data/smart_money.db ]; then
-  echo "Copying existing smart_money.db into ./data/"
-  cp ../smart_money/data/smart_money.db data/smart_money.db
-fi
 
 echo "Building Horizon image..."
 docker compose build

@@ -17,6 +17,9 @@ export const Settings = {
       backupMessage: null,
       backupMessageClass: "",
       importing: false,
+      smBackupMessage: null,
+      smBackupMessageClass: "",
+      smImporting: false,
     };
   },
   async mounted() {
@@ -103,6 +106,57 @@ export const Settings = {
         this.importing = false;
       }
     },
+    async exportSmartMoney() {
+      this.smBackupMessage = null;
+      try {
+        const r = await fetch("/api/backup/smart-money/export");
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const cd = r.headers.get("Content-Disposition") || "";
+        const m = cd.match(/filename=([^;]+)/);
+        a.href = url;
+        a.download = m ? m[1].trim() : `smart_money_backup.db`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        this.smBackupMessage = "Smart money backup downloaded";
+        this.smBackupMessageClass = "text-green";
+      } catch (e) {
+        this.smBackupMessage = `Error: ${e.message}`;
+        this.smBackupMessageClass = "text-red";
+      } finally {
+        setTimeout(() => { this.smBackupMessage = null; }, 4000);
+      }
+    },
+    triggerSmartMoneyImport() {
+      this.$refs.smImportFile.click();
+    },
+    async importSmartMoney(event) {
+      const file = event.target.files && event.target.files[0];
+      event.target.value = "";
+      if (!file) return;
+      if (!confirm("This will OVERWRITE the current smart money database with the uploaded file. Continue?")) return;
+      this.smImporting = true;
+      this.smBackupMessage = null;
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const r = await fetch("/api/backup/smart-money/import", { method: "POST", body: form });
+        const body = await r.json();
+        if (!r.ok || !body.success) throw new Error(body.error || `HTTP ${r.status}`);
+        this.smBackupMessage = "Smart money restored. Reloading...";
+        this.smBackupMessageClass = "text-green";
+        setTimeout(() => { window.location.reload(); }, 1200);
+      } catch (e) {
+        this.smBackupMessage = `Import failed: ${e.message}`;
+        this.smBackupMessageClass = "text-red";
+      } finally {
+        this.smImporting = false;
+      }
+    },
     async resetDefaults() {
       if (!confirm("Reset all pullback thresholds to defaults?")) return;
       try {
@@ -161,15 +215,6 @@ export const Settings = {
       </div>
 
       <div class="card">
-        <h3>Crash / Recession (fixed)</h3>
-        <p class="text-muted" style="margin: 0;">
-          St. Louis Fed and VIX use the worst color across both indicators:
-          any red → NO TRADE; any orange (no red) → CAUTION; otherwise OK.
-          These thresholds are not adjustable.
-        </p>
-      </div>
-
-      <div class="card">
         <h3>Data Backup</h3>
         <p class="text-muted">
           Export a full JSON backup of all Horizon data (market checks, valuations, research, trades, settings).
@@ -182,6 +227,22 @@ export const Settings = {
           </button>
           <input type="file" accept="application/json,.json" ref="importFile" @change="importBackup" style="display:none;">
           <span :class="backupMessageClass">{{ backupMessage }}</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Smart Money Backup</h3>
+        <p class="text-muted">
+          Export or restore the smart money database (SEC 13F guru holdings). Useful when moving to a new machine
+          so you don't have to re-run the full SEC refresh.
+        </p>
+        <div class="toolbar">
+          <button class="btn-primary" @click="exportSmartMoney">Export Smart Money</button>
+          <button class="btn-ghost" :disabled="smImporting" @click="triggerSmartMoneyImport">
+            {{ smImporting ? "Importing..." : "Import Smart Money" }}
+          </button>
+          <input type="file" accept=".db,application/octet-stream" ref="smImportFile" @change="importSmartMoney" style="display:none;">
+          <span :class="smBackupMessageClass">{{ smBackupMessage }}</span>
         </div>
       </div>
     </div>

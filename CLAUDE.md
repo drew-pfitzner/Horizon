@@ -148,14 +148,15 @@ docker compose down             # Stop
 
 ## Implementation Notes
 
-- **Background jobs:** `sm_job.py` spawns `python cli.py update` in a thread, streams stdout to a ring buffer (max 200 lines), exposed via `/api/smart-money/update/status`
+- **Background jobs:** `sm_job.py` spawns `python cli.py update` in a thread inside `smart_money/`, streams stdout to a ring buffer (max 200 lines), exposed via `/api/smart-money/update/status`
+- **Vendored smart_money:** The smart_money ETL package lives at `Horizon/smart_money/` (vendored, not a sibling repo). Its `smart_money/config.py` honors `SMART_MONEY_DB_PATH` / `SMART_MONEY_DATA_DIR` env vars so the ETL writes to the same DB Flask reads from
 - **Data paths:** All DB/config paths accept env vars (`HORIZON_DB_PATH`, `SMART_MONEY_DB_PATH`, `SMART_MONEY_DIR`) for flexibility between dev/Docker
-- **Docker context:** Build context is parent dir (so both `Horizon/` and `smart_money/` get copied in); smart_money ETL runs as subprocess
+- **Docker context:** Build context is `Horizon/` itself; single `requirements.txt` installs both Horizon and smart_money deps
 - **Flask debug:** Set `FLASK_DEBUG=0` in Docker so auto-reloader doesn't kill background threads; defaults to `1` (true) locally
 
 ## Maintenance Notes
 
-- SEC identity: `drew.pfitzner@gmail.com`
+- SEC identity: set via `SEC_IDENTITY` env var (or on first ETL run, the CLI prompts and saves to `~/.smart_money/settings.json`)
 - Valuation formula: Equity Multiplier = (r/req)² + (d/req)×(1+r/req) where r=reinvested%, d=distributed%, req=required_return%
 - Payout inputs: Accept percentages (27, not 0.27); frontend converts ÷100 before API
 - MOS: Applies 10% discount to ROE only; payout stays at median

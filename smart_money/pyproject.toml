@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-money"
+version = "1.0.0"
+description = "Track 120+ guru fund managers' 13F SEC filings from the terminal"
+requires-python = ">=3.10"
+dependencies = [
+    "edgartools>=3.0",
+    "requests>=2.31",
+    "tabulate>=0.9",
+    "rich>=13.0",
+    "textual>=0.70",
+]
+
+[project.scripts]
+sm = "sm:main"
+
+[tool.setuptools]
+py-modules = ["sm", "cli"]
+packages = ["smart_money"]

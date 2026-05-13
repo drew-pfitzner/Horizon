@@ -36,3 +36,15 @@ build/
 
 # Docker runtime data (horizon.db + smart_money.db live here)
 data/
+
+# Local Claude Code permissions
+.claude/settings.local.json
+
+# Personal research materials (journals, spreadsheets, screenshots)
+research_materials/
+
+# Vendored smart_money runtime artifacts
+smart_money/data/
+smart_money/venv/
+smart_money/build/
+smart_money/*.egg-info/

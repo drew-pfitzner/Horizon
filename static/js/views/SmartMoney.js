@@ -17,6 +17,7 @@ export const SmartMoney = {
       updateStarting: false,
       pollTimer: null,
       showLog: false,
+      navStack: [],
     };
   },
   async mounted() {
@@ -52,8 +53,25 @@ export const SmartMoney = {
       finally { this.topLoading = false; }
     },
     pickGuru(name) {
+      this.navStack.push({ tab: this.tab, tickerQuery: this.tickerQuery, guruQuery: this.guruQuery });
       this.guruQuery = name;
+      this.tab = "guru";
       this.searchGuru();
+    },
+    pickTicker(ticker) {
+      this.navStack.push({ tab: this.tab, tickerQuery: this.tickerQuery, guruQuery: this.guruQuery });
+      this.tickerQuery = ticker;
+      this.tab = "ticker";
+      this.searchTicker();
+    },
+    goBack() {
+      const prev = this.navStack.pop();
+      if (!prev) return;
+      this.tab = prev.tab;
+      this.tickerQuery = prev.tickerQuery;
+      this.guruQuery = prev.guruQuery;
+      if (prev.tab === "ticker" && prev.tickerQuery) this.searchTicker();
+      else if (prev.tab === "guru" && prev.guruQuery) this.searchGuru();
     },
     async fetchUpdateStatus() {
       try {
@@ -130,6 +148,7 @@ export const SmartMoney = {
       <div v-if="tab === 'ticker'">
         <div class="card">
           <div class="toolbar">
+            <button class="btn-ghost" v-if="navStack.length" @click="goBack">← Back</button>
             <input type="search" v-model="tickerQuery" @keyup.enter="searchTicker" placeholder="Enter ticker (e.g. AAPL)">
             <button class="btn-primary" @click="searchTicker" :disabled="tickerLoading">
               {{ tickerLoading ? '...' : 'Search' }}
@@ -152,7 +171,7 @@ export const SmartMoney = {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="h in tickerResult.holders" :key="h.name" class="clickable" @click="pickGuru(h.name); tab = 'guru'">
+                  <tr v-for="h in tickerResult.holders" :key="h.name" class="clickable" @click="pickGuru(h.name)">
                     <td>{{ h.name }}</td>
                     <td class="text-muted">{{ h.firm }}</td>
                     <td class="num">{{ fmtNum(h.shares, 0) }}</td>
@@ -163,7 +182,7 @@ export const SmartMoney = {
                     </td>
                     <td><span :class="statusClass(h.status)">{{ h.status }}</span></td>
                   </tr>
-                  <tr v-for="e in tickerResult.exited" :key="'x'+e.name" class="clickable" @click="pickGuru(e.name); tab = 'guru'">
+                  <tr v-for="e in tickerResult.exited" :key="'x'+e.name" class="clickable" @click="pickGuru(e.name)">
                     <td>{{ e.name }}</td>
                     <td class="text-muted">{{ e.firm }}</td>
                     <td class="num">0</td>
@@ -183,6 +202,7 @@ export const SmartMoney = {
       <div v-if="tab === 'guru'">
         <div class="card">
           <div class="toolbar">
+            <button class="btn-ghost" v-if="navStack.length" @click="goBack">← Back</button>
             <input type="search" v-model="guruQuery" @keyup.enter="searchGuru" placeholder="Guru name (e.g. Buffett, Burry)" list="guru-options">
             <datalist id="guru-options">
               <option v-for="g in gurus" :key="g.id" :value="g.name">{{ g.firm }}</option>
@@ -206,7 +226,7 @@ export const SmartMoney = {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="h in guruResult.holdings" :key="h.ticker">
+                <tr v-for="h in guruResult.holdings" :key="h.ticker" class="clickable" @click="pickTicker(h.ticker)">
                   <td><strong>{{ h.ticker }}</strong></td>
                   <td class="text-muted">{{ h.issuer }}</td>
                   <td class="num">{{ fmtNum(h.shares, 0) }}</td>
@@ -237,7 +257,7 @@ export const SmartMoney = {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="h in top.holdings" :key="h.ticker">
+              <tr v-for="h in top.holdings" :key="h.ticker" class="clickable" @click="pickTicker(h.ticker)">
                 <td><strong>{{ h.ticker }}</strong></td>
                 <td class="text-muted">{{ h.issuer }}</td>
                 <td class="num">{{ h.num_gurus }}</td>

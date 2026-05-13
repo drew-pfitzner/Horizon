@@ -1,5 +1,3 @@
-# Build context must be the parent directory containing both `Horizon/` and `smart_money/`.
-# `docker-compose.yml` sets context: .. for this reason.
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -16,21 +14,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Install Horizon deps
-COPY Horizon/requirements.txt /tmp/horizon-requirements.txt
-RUN pip install -r /tmp/horizon-requirements.txt
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
 
-# Install smart_money deps
-COPY smart_money/requirements.txt /tmp/sm-requirements.txt
-RUN pip install -r /tmp/sm-requirements.txt
-
-# Copy smart_money project (ETL + CLI)
-COPY smart_money/ /app/smart_money/
-
-# Copy Horizon
-COPY Horizon/ /app/horizon/
-
-WORKDIR /app/horizon
+COPY . /app/
 
 EXPOSE 5001
 

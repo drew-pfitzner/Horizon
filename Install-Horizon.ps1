@@ -17,22 +17,7 @@ try { docker compose version | Out-Null } catch {
   exit 1
 }
 
-if (-not (Test-Path "..\smart_money")) {
-  Write-Host "ERROR: ..\smart_money not found." -ForegroundColor Red
-  Write-Host "Horizon expects the smart_money project as a sibling directory."
-  exit 1
-}
-
 New-Item -ItemType Directory -Force -Path .\data | Out-Null
-
-if ((Test-Path .\horizon.db) -and -not (Test-Path .\data\horizon.db)) {
-  Write-Host "Copying existing horizon.db into .\data\"
-  Copy-Item .\horizon.db .\data\horizon.db
-}
-if ((Test-Path ..\smart_money\data\smart_money.db) -and -not (Test-Path .\data\smart_money.db)) {
-  Write-Host "Copying existing smart_money.db into .\data\"
-  Copy-Item ..\smart_money\data\smart_money.db .\data\smart_money.db
-}
 
 Write-Host "Building Horizon image..."
 docker compose build
