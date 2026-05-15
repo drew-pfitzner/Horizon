@@ -13,10 +13,15 @@ cd Horizon
 bash install.sh
 ```
 
-**Windows (PowerShell):**
-```powershell
+**Windows (Batch):**
+```cmd
 git clone <repo-url> Horizon
 cd Horizon
+install.bat
+```
+
+*Alternative (PowerShell):*
+```powershell
 .\Install-Horizon.ps1
 ```
 
@@ -24,10 +29,13 @@ Open <http://localhost:5001>.
 
 ## Update
 
+For Docker rebuilds (e.g., after Dockerfile changes):
 ```bash
-bash update.sh           # Mac / Linux
-.\Update-Horizon.ps1     # Windows
+bash update.sh    # Mac / Linux
+update.bat        # Windows
 ```
+
+For code-only updates: **Settings → App Updates → Update & Restart** (no script needed; pulls latest, restarts in-place).
 
 Data in `./data/` is preserved across rebuilds.
 
