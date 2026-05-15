@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1 \
     HORIZON_DB_PATH=/app/data/horizon.db
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl git \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

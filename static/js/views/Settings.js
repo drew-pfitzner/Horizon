@@ -24,10 +24,16 @@ export const Settings = {
       smBackupMessage: null,
       smBackupMessageClass: "",
       smImporting: false,
+      sysInfo: null,
+      checkingUpdate: false,
+      updating: false,
+      sysMessage: null,
+      sysMessageClass: "",
     };
   },
   async mounted() {
     await this.load();
+    await this.loadSystem();
   },
   methods: {
     async load() {
@@ -177,6 +183,75 @@ export const Settings = {
         this.smImporting = false;
       }
     },
+    async loadSystem() {
+      try {
+        this.sysInfo = await get("/api/system/info");
+      } catch (e) {
+        this.sysInfo = { git_available: false, message: `Error: ${e.message}` };
+      }
+    },
+    async checkForUpdate() {
+      this.checkingUpdate = true;
+      this.sysMessage = null;
+      try {
+        this.sysInfo = await post("/api/system/check");
+        this.sysMessage = this.sysInfo.behind
+          ? `${this.sysInfo.behind} update${this.sysInfo.behind === 1 ? "" : "s"} available`
+          : "Already up to date";
+        this.sysMessageClass = "text-green";
+      } catch (e) {
+        this.sysMessage = `Error: ${e.message}`;
+        this.sysMessageClass = "text-red";
+      } finally {
+        this.checkingUpdate = false;
+        setTimeout(() => { this.sysMessage = null; }, 4000);
+      }
+    },
+    async runUpdate() {
+      if (!confirm("Pull latest changes and restart Horizon? The app will be unreachable for a few seconds.")) return;
+      this.updating = true;
+      this.sysMessage = "Pulling latest…";
+      this.sysMessageClass = "";
+      try {
+        const result = await post("/api/system/update");
+        if (!result.restarting) {
+          this.sysMessage = result.message || "Already up to date";
+          this.sysMessageClass = "text-green";
+          this.updating = false;
+          return;
+        }
+        const note = result.deps_changed
+          ? " (requirements.txt changed — run update.sh from host to fully rebuild)"
+          : result.image_changed
+            ? " (Dockerfile/compose changed — run update.sh from host to rebuild)"
+            : "";
+        this.sysMessage = `Updated ${result.before}→${result.after}. Restarting…${note}`;
+        this.sysMessageClass = "text-green";
+        await this.waitForRestart(result.after);
+      } catch (e) {
+        this.sysMessage = `Update failed: ${e.message}`;
+        this.sysMessageClass = "text-red";
+        this.updating = false;
+      }
+    },
+    async waitForRestart(targetSha) {
+      const start = Date.now();
+      const timeoutMs = 90_000;
+      while (Date.now() - start < timeoutMs) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const info = await get("/api/system/info");
+          if (info && info.full_sha && info.full_sha.startsWith(targetSha)) {
+            this.sysMessage = "Restart complete. Reloading…";
+            setTimeout(() => window.location.reload(), 700);
+            return;
+          }
+        } catch (e) { /* still down */ }
+      }
+      this.sysMessage = "Restart taking longer than expected — reload manually if needed.";
+      this.sysMessageClass = "text-red";
+      this.updating = false;
+    },
     async resetDefaults() {
       if (!confirm("Reset all pullback thresholds to defaults?")) return;
       try {
@@ -196,6 +271,36 @@ export const Settings = {
   template: `
     <div>
       <h1>Settings</h1>
+
+      <div class="card" v-if="sysInfo">
+        <h3>App Updates</h3>
+        <p class="text-muted" v-if="!sysInfo.git_available">{{ sysInfo.message }}</p>
+        <div v-else>
+          <div class="text-muted" style="margin-bottom: .5rem;">
+            Branch: <strong>{{ sysInfo.branch }}</strong> ·
+            Current: <code>{{ sysInfo.sha }}</code>
+            <span v-if="sysInfo.dirty" class="text-red"> (uncommitted changes)</span>
+            <span v-if="sysInfo.has_upstream && sysInfo.behind > 0" class="text-green">
+              · {{ sysInfo.behind }} behind origin
+            </span>
+            <span v-if="sysInfo.has_upstream && sysInfo.behind === 0" class="text-muted"> · up to date</span>
+          </div>
+          <div class="text-muted" style="margin-bottom: 1rem;">
+            Latest commit: <em>{{ sysInfo.subject }}</em>
+          </div>
+          <div class="toolbar">
+            <button class="btn-ghost" :disabled="checkingUpdate || updating" @click="checkForUpdate">
+              {{ checkingUpdate ? "Checking…" : "Check for Updates" }}
+            </button>
+            <button class="btn-primary"
+                    :disabled="updating || sysInfo.dirty || !sysInfo.behind"
+                    @click="runUpdate">
+              {{ updating ? "Updating…" : (sysInfo.behind ? "Update & Restart" : "Up to date") }}
+            </button>
+            <span :class="sysMessageClass">{{ sysMessage }}</span>
+          </div>
+        </div>
+      </div>
 
       <div class="card" v-if="thresholds">
         <h3>Pullback / Correction Thresholds</h3>
