@@ -10,6 +10,7 @@ from routes.smart_money import bp as smart_money_bp
 from routes.settings import bp as settings_bp
 from routes.backup import bp as backup_bp
 from routes.system import bp as system_bp
+from routes.company import bp as company_bp
 
 
 def create_app():
@@ -22,6 +23,7 @@ def create_app():
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
     app.register_blueprint(backup_bp, url_prefix="/api/backup")
     app.register_blueprint(system_bp, url_prefix="/api/system")
+    app.register_blueprint(company_bp, url_prefix="/api/company")
 
     @app.route("/")
     @app.route("/<path:path>")

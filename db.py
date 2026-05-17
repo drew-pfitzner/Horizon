@@ -117,6 +117,16 @@ def init_db():
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS company_info_cache (
+                ticker TEXT PRIMARY KEY,
+                company_name TEXT,
+                sector TEXT,
+                industry TEXT,
+                cik TEXT,
+                source TEXT,
+                fetched_at TEXT
+            );
         """)
         for k, v in DEFAULT_SETTINGS.items():
             db.execute(

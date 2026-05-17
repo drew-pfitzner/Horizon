@@ -63,6 +63,18 @@ export const Trades = {
     },
     openNew() { this.modalMode = "new"; this.form = this._emptyTrade(); },
     openEdit(t) { this.modalMode = "edit"; this.form = { ...this._emptyTrade(), ...t }; },
+    async onTickerBlur() { await this.prefillCompany(false); },
+    async prefillCompany(force) {
+      const t = (this.form.ticker || "").trim().toUpperCase();
+      if (!t) return;
+      try {
+        const data = await get(`/api/company/${t}${force ? "?refresh=1" : ""}`);
+        if (!data) return;
+        if (force || !this.form.company_name) this.form.company_name = data.company_name || this.form.company_name;
+        if (force || !this.form.sector) this.form.sector = data.sector || this.form.sector;
+        if (force || !this.form.industry) this.form.industry = data.industry || this.form.industry;
+      } catch (e) { console.error(e); }
+    },
     closeModal() { this.modalMode = null; this.message = null; },
     payload() {
       const p = { ...this.form };
@@ -240,10 +252,10 @@ export const Trades = {
           <div class="grid-2">
             <div class="field">
               <label>Ticker</label>
-              <input type="text" v-model="form.ticker">
+              <input type="text" v-model="form.ticker" @blur="onTickerBlur">
             </div>
             <div class="field">
-              <label>Company</label>
+              <label>Company <button type="button" class="btn-ghost" style="font-size: 0.75rem; padding: 0 0.4rem; margin-left: 0.4rem;" :disabled="!form.ticker" @click="prefillCompany(true)" title="Refetch company/sector/industry from SEC/local sources">Prefill</button></label>
               <input type="text" v-model="form.company_name">
             </div>
             <div class="field">

@@ -87,7 +87,16 @@ export const Research = {
     },
     cancel() { this.mode = "list"; this.smHolders = null; this.saveError = null; },
     async onTickerBlur() {
-      await Promise.all([this.fetchSmartMoney(), this.fetchValuation()]);
+      await Promise.all([this.fetchSmartMoney(), this.fetchValuation(), this.prefillCompany(false)]);
+    },
+    async prefillCompany(force) {
+      const t = (this.form.ticker || "").trim().toUpperCase();
+      if (!t) return;
+      try {
+        const data = await get(`/api/company/${t}${force ? "?refresh=1" : ""}`);
+        if (!data) return;
+        if (force || !this.form.company_name) this.form.company_name = data.company_name || this.form.company_name;
+      } catch (e) { console.error(e); }
     },
     async fetchSmartMoney() {
       const t = (this.form.ticker || "").trim().toUpperCase();
@@ -234,7 +243,7 @@ export const Research = {
                 <input type="text" v-model="form.ticker" @blur="onTickerBlur" placeholder="AAPL">
               </div>
               <div class="field">
-                <label>Company</label>
+                <label>Company <button type="button" class="btn-ghost" style="font-size: 0.75rem; padding: 0 0.4rem; margin-left: 0.4rem;" :disabled="!form.ticker" @click="prefillCompany(true)" title="Refetch from SEC/local sources">Prefill</button></label>
                 <input type="text" v-model="form.company_name">
               </div>
               <div class="field">
