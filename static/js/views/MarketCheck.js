@@ -1,4 +1,4 @@
-import { get, post, del, isoToday, fmtDate } from "../utils.js";
+import { get, post, del, isoToday, fmtDate, sortRows, toggleSortState } from "../utils.js";
 
 export const MarketCheck = {
   emits: ["gate-updated"],
@@ -16,9 +16,11 @@ export const MarketCheck = {
       messageClass: "",
       history: [],
       pendingDelete: null,
+      historySort: { key: "date", dir: "desc" },
     };
   },
   computed: {
+    sortedHistory() { return sortRows(this.history, this.historySort.key, this.historySort.dir); },
     stlColor() {
       const v = this.form.st_louis_fed;
       if (v == null || v === "") return "muted";
@@ -47,6 +49,7 @@ export const MarketCheck = {
     form: { deep: true, handler() { this.recompute(); } },
   },
   methods: {
+    sortHistory(col) { toggleSortState(this.historySort, col); },
     _scoreColor(v, low, mid) {
       if (v == null || v === "") return "muted";
       if (v <= low) return "green";
@@ -260,12 +263,20 @@ export const MarketCheck = {
         <div class="table-wrap" v-if="history.length"><table class="table">
           <thead>
             <tr>
-              <th>Date</th><th>STL</th><th>VIX</th><th>RSI</th><th>STO</th><th>S5FI</th><th>F/G</th>
-              <th>Risk</th><th>Size</th><th></th>
+              <sort-th col="date" :sort="historySort" @sort="sortHistory">Date</sort-th>
+              <sort-th col="st_louis_fed" :sort="historySort" @sort="sortHistory" :num="true">STL</sort-th>
+              <sort-th col="vix" :sort="historySort" @sort="sortHistory" :num="true">VIX</sort-th>
+              <sort-th col="rsi" :sort="historySort" @sort="sortHistory" :num="true">RSI</sort-th>
+              <sort-th col="stochastic" :sort="historySort" @sort="sortHistory" :num="true">STO</sort-th>
+              <sort-th col="s5fi" :sort="historySort" @sort="sortHistory" :num="true">S5FI</sort-th>
+              <sort-th col="fear_greed" :sort="historySort" @sort="sortHistory" :num="true">F/G</sort-th>
+              <sort-th col="crash_risk" :sort="historySort" @sort="sortHistory">Risk</sort-th>
+              <sort-th col="position_size_level" :sort="historySort" @sort="sortHistory">Size</sort-th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in history" :key="row.date" class="clickable">
+            <tr v-for="row in sortedHistory" :key="row.date" class="clickable">
               <td @click="loadFromHistory(row)">{{ fmtDate(row.date) }}</td>
               <td class="num" @click="loadFromHistory(row)">{{ row.st_louis_fed }}</td>
               <td class="num" @click="loadFromHistory(row)">{{ row.vix }}</td>

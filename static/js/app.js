@@ -59,5 +59,33 @@ const app = createApp({
   },
 });
 
+// Global sortable table header component.
+// Usage: <sort-th col="ticker" :sort="sort" @sort="toggleSort">Ticker</sort-th>
+//        - `sort` is a reactive object { key, dir }
+//        - emits `sort` with the column name; parent toggles state
+//        - add :num="true" for right-aligned numeric columns
+app.component("sort-th", {
+  props: {
+    col: { type: String, required: true },
+    sort: { type: Object, required: true },
+    num: { type: Boolean, default: false },
+  },
+  emits: ["sort"],
+  computed: {
+    active() { return this.sort && this.sort.key === this.col; },
+    indicator() {
+      if (!this.active) return " "; // em-space placeholder keeps width stable
+      return this.sort.dir === "desc" ? "↓" : "↑";
+    },
+  },
+  template: `
+    <th :class="['sortable', num ? 'num' : '', active ? 'sort-active' : '']"
+        @click="$emit('sort', col)">
+      <span class="sort-label"><slot></slot></span>
+      <span class="sort-ind">{{ indicator }}</span>
+    </th>
+  `,
+});
+
 app.use(router);
 app.mount("#app");

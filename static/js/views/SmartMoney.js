@@ -1,4 +1,4 @@
-import { get, post, fmtMoney, fmtNum, statusClass } from "../utils.js";
+import { get, post, fmtMoney, fmtNum, statusClass, sortRows, toggleSortState } from "../utils.js";
 
 export const SmartMoney = {
   data() {
@@ -18,7 +18,28 @@ export const SmartMoney = {
       pollTimer: null,
       showLog: false,
       navStack: [],
+      tickerSort: { key: "weight", dir: "desc" },
+      guruSort: { key: "weight", dir: "desc" },
+      topSort: { key: "total_value", dir: "desc" },
     };
+  },
+  computed: {
+    sortedTickerHolders() {
+      if (!this.tickerResult) return [];
+      return sortRows(this.tickerResult.holders || [], this.tickerSort.key, this.tickerSort.dir);
+    },
+    sortedTickerExited() {
+      if (!this.tickerResult) return [];
+      return sortRows(this.tickerResult.exited || [], this.tickerSort.key, this.tickerSort.dir);
+    },
+    sortedGuruHoldings() {
+      if (!this.guruResult) return [];
+      return sortRows(this.guruResult.holdings || [], this.guruSort.key, this.guruSort.dir);
+    },
+    sortedTopHoldings() {
+      if (!this.top) return [];
+      return sortRows(this.top.holdings || [], this.topSort.key, this.topSort.dir);
+    },
   },
   async mounted() {
     try { this.gurus = await get("/api/smart-money/gurus") || []; } catch (e) { console.error(e); this.gurus = []; }
@@ -30,6 +51,9 @@ export const SmartMoney = {
     this.stopPolling();
   },
   methods: {
+    sortTicker(col) { toggleSortState(this.tickerSort, col); },
+    sortGuru(col) { toggleSortState(this.guruSort, col); },
+    sortTop(col) { toggleSortState(this.topSort, col); },
     async searchTicker() {
       const t = (this.tickerQuery || "").trim().toUpperCase();
       if (!t) return;
@@ -164,14 +188,17 @@ export const SmartMoney = {
               <div class="table-wrap"><table class="table">
                 <thead>
                   <tr>
-                    <th>Guru</th><th>Firm</th>
-                    <th class="num">Shares</th><th class="num">Value</th>
-                    <th class="num">Weight</th><th class="num">Δ Weight</th>
-                    <th>Status</th>
+                    <sort-th col="name" :sort="tickerSort" @sort="sortTicker">Guru</sort-th>
+                    <sort-th col="firm" :sort="tickerSort" @sort="sortTicker">Firm</sort-th>
+                    <sort-th col="shares" :sort="tickerSort" @sort="sortTicker" :num="true">Shares</sort-th>
+                    <sort-th col="value_usd" :sort="tickerSort" @sort="sortTicker" :num="true">Value</sort-th>
+                    <sort-th col="weight" :sort="tickerSort" @sort="sortTicker" :num="true">Weight</sort-th>
+                    <sort-th col="weight_change" :sort="tickerSort" @sort="sortTicker" :num="true">Δ Weight</sort-th>
+                    <sort-th col="status" :sort="tickerSort" @sort="sortTicker">Status</sort-th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="h in tickerResult.holders" :key="h.name" class="clickable" @click="pickGuru(h.name)">
+                  <tr v-for="h in sortedTickerHolders" :key="h.name" class="clickable" @click="pickGuru(h.name)">
                     <td>{{ h.name }}</td>
                     <td class="text-muted">{{ h.firm }}</td>
                     <td class="num">{{ fmtNum(h.shares, 0) }}</td>
@@ -182,7 +209,7 @@ export const SmartMoney = {
                     </td>
                     <td><span :class="statusClass(h.status)">{{ h.status }}</span></td>
                   </tr>
-                  <tr v-for="e in tickerResult.exited" :key="'x'+e.name" class="clickable" @click="pickGuru(e.name)">
+                  <tr v-for="e in sortedTickerExited" :key="'x'+e.name" class="clickable" @click="pickGuru(e.name)">
                     <td>{{ e.name }}</td>
                     <td class="text-muted">{{ e.firm }}</td>
                     <td class="num">0</td>
@@ -220,13 +247,16 @@ export const SmartMoney = {
             <div class="table-wrap"><table class="table" v-if="guruResult.holdings.length">
               <thead>
                 <tr>
-                  <th>Ticker</th><th>Issuer</th>
-                  <th class="num">Shares</th><th class="num">Value</th>
-                  <th class="num">Weight</th><th>Status</th>
+                  <sort-th col="ticker" :sort="guruSort" @sort="sortGuru">Ticker</sort-th>
+                  <sort-th col="issuer" :sort="guruSort" @sort="sortGuru">Issuer</sort-th>
+                  <sort-th col="shares" :sort="guruSort" @sort="sortGuru" :num="true">Shares</sort-th>
+                  <sort-th col="value_usd" :sort="guruSort" @sort="sortGuru" :num="true">Value</sort-th>
+                  <sort-th col="weight" :sort="guruSort" @sort="sortGuru" :num="true">Weight</sort-th>
+                  <sort-th col="status" :sort="guruSort" @sort="sortGuru">Status</sort-th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="h in guruResult.holdings" :key="h.ticker" class="clickable" @click="pickTicker(h.ticker)">
+                <tr v-for="h in sortedGuruHoldings" :key="h.ticker" class="clickable" @click="pickTicker(h.ticker)">
                   <td><strong>{{ h.ticker }}</strong></td>
                   <td class="text-muted">{{ h.issuer }}</td>
                   <td class="num">{{ fmtNum(h.shares, 0) }}</td>
@@ -251,13 +281,16 @@ export const SmartMoney = {
           <div class="table-wrap" v-else-if="top && top.holdings.length"><table class="table">
             <thead>
               <tr>
-                <th>Ticker</th><th>Issuer</th>
-                <th class="num"># Gurus</th><th class="num">Total Value</th>
-                <th class="num">Avg Weight</th><th class="num">Max Weight</th>
+                <sort-th col="ticker" :sort="topSort" @sort="sortTop">Ticker</sort-th>
+                <sort-th col="issuer" :sort="topSort" @sort="sortTop">Issuer</sort-th>
+                <sort-th col="num_gurus" :sort="topSort" @sort="sortTop" :num="true"># Gurus</sort-th>
+                <sort-th col="total_value" :sort="topSort" @sort="sortTop" :num="true">Total Value</sort-th>
+                <sort-th col="avg_weight" :sort="topSort" @sort="sortTop" :num="true">Avg Weight</sort-th>
+                <sort-th col="max_weight" :sort="topSort" @sort="sortTop" :num="true">Max Weight</sort-th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="h in top.holdings" :key="h.ticker" class="clickable" @click="pickTicker(h.ticker)">
+              <tr v-for="h in sortedTopHoldings" :key="h.ticker" class="clickable" @click="pickTicker(h.ticker)">
                 <td><strong>{{ h.ticker }}</strong></td>
                 <td class="text-muted">{{ h.issuer }}</td>
                 <td class="num">{{ h.num_gurus }}</td>

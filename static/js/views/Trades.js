@@ -1,4 +1,4 @@
-import { get, post, put, del, isoToday, fmtDate, fmtMoney, fmtPct, fmtNum } from "../utils.js";
+import { get, post, put, del, isoToday, fmtDate, fmtMoney, fmtPct, fmtNum, sortRows, toggleSortState } from "../utils.js";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -15,6 +15,8 @@ export const Trades = {
       message: null,
       messageClass: "",
       pendingDelete: null,
+      logSort: { key: null, dir: "asc" },
+      perfSort: { key: null, dir: "asc" },
     };
   },
   async mounted() {
@@ -37,11 +39,18 @@ export const Trades = {
   },
   computed: {
     sortedTrades() {
+      if (this.logSort.key) return sortRows(this.trades, this.logSort.key, this.logSort.dir);
       return [...this.trades].sort((a, b) => {
         const aOpen = !a.exit_date, bOpen = !b.exit_date;
         if (aOpen !== bOpen) return aOpen ? -1 : 1;
         return (b.entry_date || "").localeCompare(a.entry_date || "");
       });
+    },
+    sortedMonths() {
+      if (!this.perf) return [];
+      const months = this.perf.months.map((m, i) => ({ ...m, _idx: i, _label: MONTHS[i] }));
+      if (!this.perfSort.key) return months;
+      return sortRows(months, this.perfSort.key, this.perfSort.dir);
     },
     monthsList() { return MONTHS; },
   },
@@ -61,6 +70,8 @@ export const Trades = {
     async loadPerf() {
       try { this.perf = await get(`/api/trades/performance?year=${this.year}`); } catch (e) { console.error(e); }
     },
+    sortLog(col) { toggleSortState(this.logSort, col); },
+    sortPerf(col) { toggleSortState(this.perfSort, col); },
     openNew() { this.modalMode = "new"; this.form = this._emptyTrade(); },
     openEdit(t) { this.modalMode = "edit"; this.form = { ...this._emptyTrade(), ...t }; },
     async onTickerBlur() { await this.prefillCompany(false); },
@@ -148,10 +159,19 @@ export const Trades = {
           <div class="table-wrap"><table class="table">
             <thead>
               <tr>
-                <th>Ticker</th><th>Strat</th><th>Cur</th>
-                <th>Entry</th><th class="num">Px In</th><th class="num">Shares</th><th class="num">Pos %</th>
-                <th>Exit</th><th class="num">Px Out</th>
-                <th class="num">P/L</th><th class="num">ROI</th><th>W/L</th><th></th>
+                <sort-th col="ticker" :sort="logSort" @sort="sortLog">Ticker</sort-th>
+                <sort-th col="strategy" :sort="logSort" @sort="sortLog">Strat</sort-th>
+                <sort-th col="currency" :sort="logSort" @sort="sortLog">Cur</sort-th>
+                <sort-th col="entry_date" :sort="logSort" @sort="sortLog">Entry</sort-th>
+                <sort-th col="entry_price" :sort="logSort" @sort="sortLog" :num="true">Px In</sort-th>
+                <sort-th col="shares" :sort="logSort" @sort="sortLog" :num="true">Shares</sort-th>
+                <sort-th col="position_size_pct" :sort="logSort" @sort="sortLog" :num="true">Pos %</sort-th>
+                <sort-th col="exit_date" :sort="logSort" @sort="sortLog">Exit</sort-th>
+                <sort-th col="exit_price" :sort="logSort" @sort="sortLog" :num="true">Px Out</sort-th>
+                <sort-th col="pl_dollar" :sort="logSort" @sort="sortLog" :num="true">P/L</sort-th>
+                <sort-th col="roi_pct" :sort="logSort" @sort="sortLog" :num="true">ROI</sort-th>
+                <sort-th col="win_loss" :sort="logSort" @sort="sortLog">W/L</sort-th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -217,14 +237,18 @@ export const Trades = {
           <div class="table-wrap"><table class="table">
             <thead>
               <tr>
-                <th>Month</th><th class="num">Opened</th><th class="num">Closed</th>
-                <th class="num">Wins</th><th class="num">Losses</th>
-                <th class="num">P/L</th><th class="num">ROI</th>
+                <sort-th col="month" :sort="perfSort" @sort="sortPerf">Month</sort-th>
+                <sort-th col="open_count" :sort="perfSort" @sort="sortPerf" :num="true">Opened</sort-th>
+                <sort-th col="closed_count" :sort="perfSort" @sort="sortPerf" :num="true">Closed</sort-th>
+                <sort-th col="wins" :sort="perfSort" @sort="sortPerf" :num="true">Wins</sort-th>
+                <sort-th col="losses" :sort="perfSort" @sort="sortPerf" :num="true">Losses</sort-th>
+                <sort-th col="total_pl" :sort="perfSort" @sort="sortPerf" :num="true">P/L</sort-th>
+                <sort-th col="total_roi" :sort="perfSort" @sort="sortPerf" :num="true">ROI</sort-th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(m, i) in perf.months" :key="m.month">
-                <td>{{ monthsList[i] }}</td>
+              <tr v-for="m in sortedMonths" :key="m.month">
+                <td>{{ m._label }}</td>
                 <td class="num">{{ m.open_count }}</td>
                 <td class="num">{{ m.closed_count }}</td>
                 <td class="num text-green">{{ m.wins }}</td>

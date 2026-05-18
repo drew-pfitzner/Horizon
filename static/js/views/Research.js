@@ -1,4 +1,4 @@
-import { get, post, put, del, isoToday, fmtDate, decisionClass, assessmentClass, statusClass, fmtPct, fmtMoney } from "../utils.js";
+import { get, post, put, del, isoToday, fmtDate, decisionClass, assessmentClass, statusClass, fmtPct, fmtMoney, sortRows, toggleSortState } from "../utils.js";
 
 const FUND_FIELDS = [
   ["f_roa", "ROA > 8%"],
@@ -26,10 +26,22 @@ export const Research = {
       saveError: null,
       pendingDelete: null,
       valuation: null,
+      listSort: { key: "updated_at", dir: "desc" },
+      smSort: { key: "weight", dir: "desc" },
+      picker: { open: false, ticker: "", match: null, checked: false },
     };
   },
   computed: {
     fundFields() { return FUND_FIELDS; },
+    sortedList() { return sortRows(this.list, this.listSort.key, this.listSort.dir); },
+    sortedHolders() {
+      if (!this.smHolders) return [];
+      return sortRows(this.smHolders.holders || [], this.smSort.key, this.smSort.dir);
+    },
+    sortedExited() {
+      if (!this.smHolders) return [];
+      return sortRows(this.smHolders.exited || [], this.smSort.key, this.smSort.dir);
+    },
     fundamentalsScore() {
       return FUND_FIELDS.reduce((acc, [k]) => acc + (this.form[k] ? 1 : 0), 0);
     },
@@ -64,12 +76,54 @@ export const Research = {
     async loadList() {
       try { this.list = await get("/api/research"); } catch (e) { console.error(e); }
     },
-    newForm() {
+    newForm(prefillTicker) {
       this.form = this._emptyForm();
+      if (prefillTicker) this.form.ticker = String(prefillTicker).trim().toUpperCase();
       this.smHolders = null;
       this.valuation = null;
       this.saveError = null;
       this.mode = "new";
+      if (this.form.ticker) {
+        // Kick off background lookups so company / valuation / SM data populate.
+        this.fetchSmartMoney();
+        this.fetchValuation();
+        this.prefillCompany(false);
+      }
+    },
+    sortList(col) { toggleSortState(this.listSort, col); },
+    sortHolders(col) { toggleSortState(this.smSort, col); },
+    openPicker() {
+      this.picker = { open: true, ticker: "", match: null, checked: false };
+      this.$nextTick(() => {
+        const el = document.getElementById("research-picker-input");
+        if (el) el.focus();
+      });
+    },
+    closePicker() { this.picker.open = false; },
+    onPickerInput() {
+      const t = (this.picker.ticker || "").trim().toUpperCase();
+      this.picker.match = t ? (this.list.find(r => (r.ticker || "").toUpperCase() === t) || null) : null;
+      this.picker.checked = !!t;
+    },
+    pickerSubmit() {
+      const t = (this.picker.ticker || "").trim().toUpperCase();
+      if (!t) return;
+      this.onPickerInput();
+      const match = this.picker.match;
+      this.picker.open = false;
+      if (match) this.editForm(match);
+      else this.newForm(t);
+    },
+    openExistingFromPicker() {
+      if (!this.picker.match) return;
+      const match = this.picker.match;
+      this.picker.open = false;
+      this.editForm(match);
+    },
+    startNewFromPicker() {
+      const t = (this.picker.ticker || "").trim().toUpperCase();
+      this.picker.open = false;
+      this.newForm(t);
     },
     editForm(row) {
       this.form = { ...this._emptyForm(), ...row };
@@ -193,18 +247,22 @@ export const Research = {
         <div class="toolbar">
           <h1 style="margin: 0;">Research</h1>
           <div class="spacer"></div>
-          <button class="btn-primary" @click="newForm">+ New Research</button>
+          <button class="btn-primary" @click="openPicker">+ New Research</button>
         </div>
         <div class="card" v-if="list.length">
           <div class="table-wrap"><table class="table">
             <thead>
               <tr>
-                <th>Ticker</th><th>Date</th><th>Score</th>
-                <th>Decision</th><th>Valuation</th><th></th>
+                <sort-th col="ticker" :sort="listSort" @sort="sortList">Ticker</sort-th>
+                <sort-th col="date_researched" :sort="listSort" @sort="sortList">Date</sort-th>
+                <sort-th col="fundamentals_score" :sort="listSort" @sort="sortList">Score</sort-th>
+                <sort-th col="decision" :sort="listSort" @sort="sortList">Decision</sort-th>
+                <sort-th col="valuation_assessment" :sort="listSort" @sort="sortList">Valuation</sort-th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="r in list" :key="r.id" class="clickable" @click="editForm(r)">
+              <tr v-for="r in sortedList" :key="r.id" class="clickable" @click="editForm(r)">
                 <td><strong>{{ r.ticker }}</strong> <span class="text-muted">{{ r.company_name }}</span></td>
                 <td>{{ fmtDate(r.date_researched) }}</td>
                 <td><span class="score-pill">{{ r.fundamentals_score }}/10</span></td>
@@ -389,10 +447,16 @@ export const Research = {
           <div v-if="smHolders && (smHolders.holders.length || smHolders.exited.length)">
             <div class="table-wrap"><table class="table">
               <thead>
-                <tr><th>Guru</th><th>Firm</th><th class="num">Weight</th><th class="num">Δ Weight</th><th>Status</th></tr>
+                <tr>
+                  <sort-th col="name" :sort="smSort" @sort="sortHolders">Guru</sort-th>
+                  <sort-th col="firm" :sort="smSort" @sort="sortHolders">Firm</sort-th>
+                  <sort-th col="weight" :sort="smSort" @sort="sortHolders" :num="true">Weight</sort-th>
+                  <sort-th col="weight_change" :sort="smSort" @sort="sortHolders" :num="true">Δ Weight</sort-th>
+                  <sort-th col="status" :sort="smSort" @sort="sortHolders">Status</sort-th>
+                </tr>
               </thead>
               <tbody>
-                <tr v-for="h in smHolders.holders" :key="h.name">
+                <tr v-for="h in sortedHolders" :key="h.name">
                   <td>{{ h.name }}</td>
                   <td class="text-muted">{{ h.firm }}</td>
                   <td class="num">{{ h.weight ? h.weight.toFixed(2) + '%' : '—' }}</td>
@@ -401,7 +465,7 @@ export const Research = {
                   </td>
                   <td><span :class="statusClass(h.status)">{{ h.status }}</span></td>
                 </tr>
-                <tr v-for="e in smHolders.exited" :key="'x'+e.name">
+                <tr v-for="e in sortedExited" :key="'x'+e.name">
                   <td>{{ e.name }}</td>
                   <td class="text-muted">{{ e.firm }}</td>
                   <td class="num text-muted">0.00%</td>
@@ -420,6 +484,37 @@ export const Research = {
           <div class="field">
             <label>Notes</label>
             <textarea v-model="form.notes"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-backdrop" v-if="picker.open" @click.self="closePicker">
+        <div class="modal">
+          <h3>New Research</h3>
+          <p class="text-muted" style="margin-top: 0;">Enter a ticker. If you've researched it before, you can open and amend the existing entry — otherwise start a new one.</p>
+          <div class="field">
+            <label>Ticker</label>
+            <input id="research-picker-input" type="text" v-model="picker.ticker"
+                   @input="onPickerInput"
+                   @keyup.enter="pickerSubmit"
+                   placeholder="AAPL" autocomplete="off">
+          </div>
+          <div v-if="picker.checked && picker.match" style="margin: 0.75rem 0; padding: 0.75rem; border-radius: 4px; background: var(--bg-3);">
+            <strong>{{ picker.match.ticker }}</strong>
+            <span class="text-muted"> — {{ picker.match.company_name || 'no name' }}</span>
+            <div class="text-muted" style="font-size: 0.8rem; margin-top: 0.25rem;">
+              Last researched {{ fmtDate(picker.match.date_researched) }} · Score {{ picker.match.fundamentals_score }}/10 ·
+              <span :class="decisionClass(picker.match.decision)">{{ picker.match.decision || 'NO_ACTION' }}</span>
+            </div>
+          </div>
+          <div v-else-if="picker.checked && picker.ticker" class="text-muted" style="margin: 0.75rem 0; font-size: 0.85rem;">
+            No prior research for <strong>{{ picker.ticker.toUpperCase() }}</strong>. A new entry will be started.
+          </div>
+          <div class="modal-actions">
+            <button class="btn-ghost" @click="closePicker">Cancel</button>
+            <button v-if="picker.match" class="btn-primary" @click="openExistingFromPicker">Open &amp; Amend</button>
+            <button v-if="picker.match" @click="startNewFromPicker">Start New Anyway</button>
+            <button v-else class="btn-primary" :disabled="!picker.ticker" @click="startNewFromPicker">Start New</button>
           </div>
         </div>
       </div>

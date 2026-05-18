@@ -168,6 +168,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .table tbody tr:hover { background: var(--bg-3); }
 .table tbody tr.clickable { cursor: pointer; }
 .table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.table th.sortable:hover { color: var(--text-1); }
+.table th.sortable.sort-active { color: var(--text-1); }
+.table th.sortable .sort-ind { display: inline-block; margin-left: 0.3em; min-width: 0.7em; font-size: 0.85em; opacity: 0.85; }
 
 /* Status colors */
 .text-green { color: var(--green); }

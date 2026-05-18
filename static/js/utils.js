@@ -68,6 +68,34 @@ export function assessmentClass(a) {
   return "badge";
 }
 
+// Sort an array of row objects by a key, ascending or descending.
+// Nulls sort last regardless of direction. Numbers sort numerically; everything
+// else falls back to locale string compare with numeric option.
+export function sortRows(rows, key, dir) {
+  if (!key || !Array.isArray(rows)) return rows;
+  const mult = dir === "desc" ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    const av = a == null ? null : a[key];
+    const bv = b == null ? null : b[key];
+    const aNull = av == null || av === "";
+    const bNull = bv == null || bv === "";
+    if (aNull && bNull) return 0;
+    if (aNull) return 1;
+    if (bNull) return -1;
+    if (typeof av === "number" && typeof bv === "number") return (av - bv) * mult;
+    const an = Number(av), bn = Number(bv);
+    if (!isNaN(an) && !isNaN(bn)) return (an - bn) * mult;
+    return String(av).localeCompare(String(bv), undefined, { numeric: true }) * mult;
+  });
+}
+
+// Toggle a sort state object { key, dir } on a column click.
+// First click sets asc; second click flips to desc; third resets dir to asc again.
+export function toggleSortState(state, col) {
+  if (state.key !== col) { state.key = col; state.dir = "asc"; return; }
+  state.dir = state.dir === "asc" ? "desc" : "asc";
+}
+
 // Today as YYYY-MM-DD using local time
 export function isoToday() {
   const d = new Date();
