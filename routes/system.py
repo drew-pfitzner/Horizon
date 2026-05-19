@@ -44,6 +44,7 @@ def _collect_info(fetch_first: bool = False):
     _, subj, _ = _git("log", "-1", "--pretty=%s")
     _, date, _ = _git("log", "-1", "--pretty=%cI")
     _, dirty, _ = _git("status", "--porcelain")
+    dirty_files = [ln for ln in dirty.splitlines() if ln][:20] if dirty else []
     rc_b, behind, _ = _git("rev-list", "--count", "HEAD..@{u}")
     rc_a, ahead, _ = _git("rev-list", "--count", "@{u}..HEAD")
     return {
@@ -55,6 +56,7 @@ def _collect_info(fetch_first: bool = False):
         "subject": subj,
         "date": date,
         "dirty": bool(dirty),
+        "dirty_files": dirty_files,
         "behind": int(behind) if rc_b == 0 and behind else 0,
         "ahead": int(ahead) if rc_a == 0 and ahead else 0,
         "has_upstream": rc_b == 0,

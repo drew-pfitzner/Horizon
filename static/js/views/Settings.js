@@ -285,6 +285,11 @@ export const Settings = {
             </span>
             <span v-if="sysInfo.has_upstream && sysInfo.behind === 0" class="text-muted"> · up to date</span>
           </div>
+          <div v-if="sysInfo.dirty && sysInfo.dirty_files && sysInfo.dirty_files.length"
+               class="text-muted" style="margin-bottom: .5rem; font-family: monospace; font-size: .85em;">
+            <div>Dirty files (blocking update):</div>
+            <div v-for="f in sysInfo.dirty_files" :key="f">&nbsp;&nbsp;{{ f }}</div>
+          </div>
           <div class="text-muted" style="margin-bottom: 1rem;">
             Latest commit: <em>{{ sysInfo.subject }}</em>
           </div>
