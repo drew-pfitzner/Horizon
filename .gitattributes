@@ -1,0 +1,28 @@
+# Normalize all text files to LF on checkout, regardless of platform.
+# Prevents Windows' core.autocrlf=true from making the working tree look
+# "dirty" inside the Linux Docker container (which would block in-app updates).
+* text=auto eol=lf
+
+# Shell scripts and Python must stay LF or they break in the container.
+*.sh   text eol=lf
+*.py   text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.csv  text eol=lf
+
+# Windows-only scripts keep CRLF so cmd.exe is happy.
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+
+# Binary types — never touch.
+*.db   binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.pdf  binary
