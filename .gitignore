@@ -44,8 +44,9 @@ build/
 research_materials/
 
 # Vendored smart_money runtime artifacts
-smart_money/data/*
-!smart_money/data/guru_list.csv
+# (guru_list.csv is bootstrapped into data/ from smart_money/seed/ on first run
+#  and then mutated by the CIK resolver — keep the mutable copy ignored.)
+smart_money/data/
 smart_money/venv/
 smart_money/build/
 smart_money/*.egg-info/

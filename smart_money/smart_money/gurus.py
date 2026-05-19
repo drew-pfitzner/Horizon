@@ -1,10 +1,36 @@
 import csv
+import os
+import shutil
 import time
 from smart_money.config import GURU_LIST_PATH, FETCH_DELAY, require_sec_identity
 from smart_money.db import get_db
 
 
+SEED_GURU_LIST_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "seed",
+    "guru_list.csv",
+)
+
+
+def _ensure_guru_list():
+    """Copy the tracked seed CSV into the writable data dir on first run.
+
+    The CIK resolver writes back to GURU_LIST_PATH, so the working copy must
+    live in an ignored directory to keep the repo clean.
+    """
+    if os.path.exists(GURU_LIST_PATH):
+        return
+    os.makedirs(os.path.dirname(GURU_LIST_PATH), exist_ok=True)
+    if not os.path.exists(SEED_GURU_LIST_PATH):
+        raise FileNotFoundError(
+            f"Seed guru list not found at {SEED_GURU_LIST_PATH}"
+        )
+    shutil.copyfile(SEED_GURU_LIST_PATH, GURU_LIST_PATH)
+
+
 def load_guru_list():
+    _ensure_guru_list()
     gurus = []
     with open(GURU_LIST_PATH, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
