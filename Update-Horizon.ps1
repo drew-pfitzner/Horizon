@@ -2,13 +2,13 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-# Fix Windows line-ending dirt that blocks git pull and in-app updates.
-# (Git for Windows defaults to autocrlf=true; this repo enforces LF via .gitattributes.)
+# Discard any local modifications to tracked files so git pull never blocks.
+# (Install folder is treated as read-only; user data lives in .\data which is gitignored.)
 git config core.autocrlf false 2>$null | Out-Null
 $dirty = git status --porcelain
 if ($dirty) {
-  Write-Host "Resetting Windows line-ending changes..."
-  git checkout -- . 2>$null | Out-Null
+  Write-Host "Discarding local changes to tracked files..."
+  git reset --hard HEAD 2>$null | Out-Null
 }
 
 Write-Host "Pulling latest changes..."

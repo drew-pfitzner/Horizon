@@ -4,13 +4,13 @@ REM Pull latest code, rebuild, and restart Horizon. Data in .\data is preserved.
 setlocal enabledelayedexpansion
 pushd "%~dp0"
 
-REM Fix Windows line-ending dirt that blocks git pull and in-app updates.
-REM (Git for Windows defaults to autocrlf=true; this repo enforces LF via .gitattributes.)
+REM Discard any local modifications to tracked files so git pull never blocks.
+REM (Install folder is treated as read-only; user data lives in .\data which is gitignored.)
 git config core.autocrlf false >nul 2>nul
-git diff --quiet >nul 2>nul
+git diff --quiet HEAD >nul 2>nul
 if errorlevel 1 (
-  echo Resetting Windows line-ending changes...
-  git checkout -- . >nul 2>nul
+  echo Discarding local changes to tracked files...
+  git reset --hard HEAD >nul 2>nul
 )
 
 echo.
