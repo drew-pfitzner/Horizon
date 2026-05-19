@@ -6,12 +6,13 @@ runs at a time; status is exposed via get_state().
 """
 import os
 import sys
+import sqlite3
 import subprocess
 import threading
 from datetime import datetime
 from collections import deque
 
-from config import SMART_MONEY_DIR
+from config import SMART_MONEY_DIR, SMART_MONEY_DB
 from db import get_setting
 
 _MAX_LOG_LINES = 200
@@ -70,6 +71,26 @@ def start():
     return True
 
 
+def _db_needs_init():
+    """True if the smart_money DB has no `gurus` table or is empty."""
+    if not SMART_MONEY_DB.exists():
+        return True
+    try:
+        conn = sqlite3.connect(str(SMART_MONEY_DB))
+        try:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='gurus'"
+            ).fetchone()
+            if not row:
+                return True
+            count = conn.execute("SELECT COUNT(*) FROM gurus").fetchone()[0]
+            return count == 0
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return True
+
+
 def _run():
     try:
         if not SMART_MONEY_DIR.exists():
@@ -85,9 +106,15 @@ def _run():
         venv_py = SMART_MONEY_DIR / "venv" / "bin" / "python"
         py = str(venv_py) if venv_py.exists() else sys.executable
 
-        _append(f"$ {py} cli.py update  (cwd={SMART_MONEY_DIR})")
+        if _db_needs_init():
+            sub_cmd = "init"
+            _append("Smart money DB is empty — running first-time init (creates schema, seeds gurus, fetches 4 quarters). This takes 10–20 minutes.")
+        else:
+            sub_cmd = "update"
+
+        _append(f"$ {py} cli.py {sub_cmd}  (cwd={SMART_MONEY_DIR})")
         proc = subprocess.Popen(
-            [py, "cli.py", "update"],
+            [py, "cli.py", sub_cmd],
             cwd=str(SMART_MONEY_DIR),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
