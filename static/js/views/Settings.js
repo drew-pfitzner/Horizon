@@ -29,11 +29,22 @@ export const Settings = {
       updating: false,
       sysMessage: null,
       sysMessageClass: "",
+      maxPositionPct: 5,
+      savingMax: false,
+      maxMessage: null,
+      maxMessageClass: "",
+      fxRates: {},
+      fxDraft: { from: "USD", to: "AUD", rate: null },
+      savingFx: false,
+      refreshingFx: false,
+      fxMessage: null,
+      fxMessageClass: "",
     };
   },
   async mounted() {
     await this.load();
     await this.loadSystem();
+    await this.loadMaxAndFx();
   },
   methods: {
     async load() {
@@ -252,6 +263,76 @@ export const Settings = {
       this.sysMessageClass = "text-red";
       this.updating = false;
     },
+    async loadMaxAndFx() {
+      try {
+        this.maxPositionPct = Number(await get("/api/settings/max-position-pct")) || 5;
+        this.fxRates = await get("/api/settings/fx-rates") || {};
+      } catch (e) { console.error(e); }
+    },
+    async saveMax() {
+      this.savingMax = true;
+      this.maxMessage = null;
+      try {
+        const v = await put("/api/settings/max-position-pct", { value: Number(this.maxPositionPct) });
+        this.maxPositionPct = Number(v);
+        this.maxMessage = "Saved";
+        this.maxMessageClass = "text-green";
+      } catch (e) {
+        this.maxMessage = `Error: ${e.message}`;
+        this.maxMessageClass = "text-red";
+      } finally {
+        this.savingMax = false;
+        setTimeout(() => { this.maxMessage = null; }, 3000);
+      }
+    },
+    fxEntries() {
+      return Object.entries(this.fxRates).map(([k, v]) => ({ pair: k, ...v }));
+    },
+    async refreshFx() {
+      this.refreshingFx = true;
+      this.fxMessage = null;
+      try {
+        await post("/api/settings/fx-rates/refresh", {
+          from: (this.fxDraft.from || "USD").toUpperCase(),
+          to: (this.fxDraft.to || "AUD").toUpperCase(),
+        });
+        this.fxRates = await get("/api/settings/fx-rates") || {};
+        this.fxMessage = "Refreshed from open.er-api.com";
+        this.fxMessageClass = "text-green";
+      } catch (e) {
+        this.fxMessage = `Error: ${e.message}`;
+        this.fxMessageClass = "text-red";
+      } finally {
+        this.refreshingFx = false;
+        setTimeout(() => { this.fxMessage = null; }, 4000);
+      }
+    },
+    async saveFxOverride() {
+      if (!this.fxDraft.rate || this.fxDraft.rate <= 0) {
+        this.fxMessage = "Enter a positive rate";
+        this.fxMessageClass = "text-red";
+        return;
+      }
+      this.savingFx = true;
+      this.fxMessage = null;
+      try {
+        await put("/api/settings/fx-rates", {
+          from: (this.fxDraft.from || "USD").toUpperCase(),
+          to: (this.fxDraft.to || "AUD").toUpperCase(),
+          rate: Number(this.fxDraft.rate),
+        });
+        this.fxRates = await get("/api/settings/fx-rates") || {};
+        this.fxDraft.rate = null;
+        this.fxMessage = "Manual override saved";
+        this.fxMessageClass = "text-green";
+      } catch (e) {
+        this.fxMessage = `Error: ${e.message}`;
+        this.fxMessageClass = "text-red";
+      } finally {
+        this.savingFx = false;
+        setTimeout(() => { this.fxMessage = null; }, 3000);
+      }
+    },
     async resetDefaults() {
       if (!confirm("Reset all pullback thresholds to defaults?")) return;
       try {
@@ -358,6 +439,59 @@ export const Settings = {
             {{ savingSec ? "Saving..." : "Save SEC Email" }}
           </button>
           <span :class="secMessageClass">{{ secMessage }}</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Position Sizing</h3>
+        <p class="text-muted">
+          Maximum allowed position size as a percent of your portfolio. Trades above this threshold are flagged in amber on the Trades tab.
+        </p>
+        <div class="toolbar">
+          <label style="margin: 0;">Max Position %</label>
+          <input type="number" step="0.1" min="0.1" max="100" v-model.number="maxPositionPct" style="width: 100px;">
+          <button class="btn-primary" :disabled="savingMax" @click="saveMax">
+            {{ savingMax ? "Saving..." : "Save" }}
+          </button>
+          <span :class="maxMessageClass">{{ maxMessage }}</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Currency Conversion</h3>
+        <p class="text-muted">
+          FX rates are fetched automatically from open.er-api.com (free, no key) and cached per day.
+          You can also override any rate manually below — manual rates take priority over fetched ones.
+        </p>
+        <div class="toolbar" style="flex-wrap: wrap; gap: .5rem;">
+          <label style="margin: 0;">From</label>
+          <input type="text" v-model="fxDraft.from" style="width: 70px; text-transform: uppercase;">
+          <label style="margin: 0;">To</label>
+          <input type="text" v-model="fxDraft.to" style="width: 70px; text-transform: uppercase;">
+          <label style="margin: 0;">Rate</label>
+          <input type="number" step="0.0001" v-model.number="fxDraft.rate" style="width: 110px;" placeholder="manual rate">
+          <button class="btn-ghost" :disabled="refreshingFx" @click="refreshFx">
+            {{ refreshingFx ? "Fetching…" : "Fetch Live" }}
+          </button>
+          <button class="btn-primary" :disabled="savingFx" @click="saveFxOverride">
+            {{ savingFx ? "Saving…" : "Save Manual Rate" }}
+          </button>
+          <span :class="fxMessageClass">{{ fxMessage }}</span>
+        </div>
+        <div v-if="fxEntries().length" class="table-wrap" style="margin-top: 1rem;">
+          <table class="table">
+            <thead>
+              <tr><th>Pair</th><th class="num">Rate</th><th>Source</th><th>Updated</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="e in fxEntries()" :key="e.pair">
+                <td><strong>{{ e.pair.replace('_', ' → ') }}</strong></td>
+                <td class="num">{{ Number(e.rate).toFixed(4) }}</td>
+                <td>{{ e.source }}</td>
+                <td class="text-muted">{{ e.updated_at }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 

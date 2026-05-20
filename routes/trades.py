@@ -1,9 +1,50 @@
 from datetime import datetime, date
 from collections import defaultdict
 from flask import Blueprint, request, jsonify
-from db import get_db
+from db import get_db, get_setting
 
 bp = Blueprint("trades", __name__)
+
+
+def _portfolio_pos_pct(entry_price, shares, currency):
+    """Compute position size % vs configured portfolio, in base currency."""
+    if not entry_price or not shares:
+        return None
+    portfolio = get_setting("portfolio", {"value": 0, "currency": "AUD"}) or {}
+    try:
+        base_val = float(portfolio.get("value") or 0)
+    except (TypeError, ValueError):
+        base_val = 0
+    if base_val <= 0:
+        return None
+    base_cur = (portfolio.get("currency") or "AUD").upper()
+    from routes.settings import get_fx_rate
+    fx = get_fx_rate((currency or "USD").upper(), base_cur)
+    if fx is None:
+        return None
+    return round(entry_price * shares * fx / base_val * 100, 2)
+
+
+def recompute_open_positions():
+    portfolio = get_setting("portfolio", {"value": 0, "currency": "AUD"}) or {}
+    try:
+        base_val = float(portfolio.get("value") or 0)
+    except (TypeError, ValueError):
+        base_val = 0
+    if base_val <= 0:
+        return 0
+    count = 0
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, entry_price, shares, currency FROM trades "
+            "WHERE exit_date IS NULL OR exit_date = ''"
+        ).fetchall()
+        for r in rows:
+            pct = _portfolio_pos_pct(r["entry_price"], r["shares"], r["currency"])
+            if pct is not None:
+                db.execute("UPDATE trades SET position_size_pct=? WHERE id=?", (pct, r["id"]))
+                count += 1
+    return count
 
 
 def _compute_pl(entry_price, shares, exit_price, entry_date, exit_date):
@@ -50,6 +91,9 @@ def create():
     exit_price = float(p.get("exit_price")) if p.get("exit_price") not in (None, "") else None
 
     pl, roi, days, win_loss = _compute_pl(entry_price, shares, exit_price, entry_date, exit_date)
+    auto_pos = _portfolio_pos_pct(entry_price, shares, currency)
+    if auto_pos is not None:
+        pos_pct = auto_pos
     now = datetime.now().isoformat(timespec="seconds")
 
     with get_db() as db:
@@ -99,6 +143,11 @@ def update(tid):
             ex.get("exit_price"), ex.get("entry_date"), ex.get("exit_date"),
         )
         ex["pl_dollar"], ex["roi_pct"], ex["days_held"], ex["win_loss"] = pl, roi, days, win_loss
+
+        if not ex.get("exit_date"):
+            auto_pos = _portfolio_pos_pct(ex.get("entry_price"), ex.get("shares"), ex.get("currency"))
+            if auto_pos is not None:
+                ex["position_size_pct"] = auto_pos
 
         db.execute("""
             UPDATE trades SET

@@ -12,6 +12,9 @@ DEFAULT_SETTINGS = {
         "fear_greed": {"low": 45, "mid": 55},
     },
     "sec_identity": "",
+    "portfolio": {"value": 0, "currency": "AUD"},
+    "max_position_pct": 5.0,
+    "fx_rates": {},
 }
 
 

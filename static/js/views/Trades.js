@@ -17,10 +17,18 @@ export const Trades = {
       pendingDelete: null,
       logSort: { key: null, dir: "asc" },
       perfSort: { key: null, dir: "asc" },
+      portfolio: { value: 0, currency: "AUD" },
+      portfolioDraft: { value: 0, currency: "AUD" },
+      editingPortfolio: false,
+      savingPortfolio: false,
+      portfolioMsg: null,
+      portfolioMsgClass: "",
+      maxPositionPct: 5,
+      fxRates: {},
     };
   },
   async mounted() {
-    await Promise.all([this.loadTrades(), this.loadPerf()]);
+    await Promise.all([this.loadTrades(), this.loadPerf(), this.loadPortfolio(), this.loadMax(), this.loadFx()]);
     const q = this.$route.query;
     if (q.new === "1") {
       this.modalMode = "new";
@@ -53,6 +61,39 @@ export const Trades = {
       return sortRows(months, this.perfSort.key, this.perfSort.dir);
     },
     monthsList() { return MONTHS; },
+    formFxRate() {
+      const tradeCcy = (this.form.currency || "USD").toUpperCase();
+      const baseCcy = (this.portfolio.currency || "AUD").toUpperCase();
+      return this.fxRate(tradeCcy, baseCcy);
+    },
+    formCostTradeCcy() {
+      const p = Number(this.form.entry_price), s = Number(this.form.shares);
+      if (!p || !s) return null;
+      return p * s;
+    },
+    formCostBaseCcy() {
+      if (this.formCostTradeCcy == null || this.formFxRate == null) return null;
+      return this.formCostTradeCcy * this.formFxRate;
+    },
+    formPosPct() {
+      if (!this.portfolio.value || this.formCostBaseCcy == null) return null;
+      return this.formCostBaseCcy / this.portfolio.value * 100;
+    },
+    formPosOverMax() {
+      return this.formPosPct != null && this.formPosPct > this.maxPositionPct;
+    },
+    sizeReference() {
+      if (!this.portfolio.value) return [];
+      const baseCcy = (this.portfolio.currency || "AUD").toUpperCase();
+      const tradeCcy = (this.form.currency || "USD").toUpperCase();
+      const fxBaseToTrade = this.fxRate(baseCcy, tradeCcy);
+      const tiers = [1, 2, 3, this.maxPositionPct].filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b);
+      return tiers.map(pct => {
+        const inBase = this.portfolio.value * pct / 100;
+        const inTrade = fxBaseToTrade != null ? inBase * fxBaseToTrade : null;
+        return { pct, inBase, inTrade, baseCcy, tradeCcy, isMax: pct === this.maxPositionPct };
+      });
+    },
   },
   methods: {
     _emptyTrade() {
@@ -69,6 +110,84 @@ export const Trades = {
     },
     async loadPerf() {
       try { this.perf = await get(`/api/trades/performance?year=${this.year}`); } catch (e) { console.error(e); }
+    },
+    async loadPortfolio() {
+      try {
+        const p = await get("/api/settings/portfolio");
+        this.portfolio = { value: Number(p.value) || 0, currency: p.currency || "AUD" };
+        this.portfolioDraft = { ...this.portfolio };
+      } catch (e) { console.error(e); }
+    },
+    async loadMax() {
+      try { this.maxPositionPct = Number(await get("/api/settings/max-position-pct")) || 5; } catch (e) { console.error(e); }
+    },
+    async loadFx() {
+      try { this.fxRates = await get("/api/settings/fx-rates") || {}; } catch (e) { console.error(e); }
+    },
+    fmtCcy(n, ccy) {
+      if (n == null || isNaN(n)) return "—";
+      try {
+        return Number(n).toLocaleString("en-US", {
+          style: "currency", currency: ccy || "USD",
+          minimumFractionDigits: 2, maximumFractionDigits: 2,
+        });
+      } catch (e) {
+        return `${ccy} ${Number(n).toFixed(2)}`;
+      }
+    },
+    fxRate(from, to) {
+      from = (from || "USD").toUpperCase();
+      to = (to || "USD").toUpperCase();
+      if (from === to) return 1;
+      const entry = this.fxRates[`${from}_${to}`];
+      if (entry && entry.rate) return Number(entry.rate);
+      const inv = this.fxRates[`${to}_${from}`];
+      if (inv && inv.rate) return 1 / Number(inv.rate);
+      return null;
+    },
+    livePosPct(t) {
+      if (!this.portfolio.value || !t.entry_price || !t.shares) return null;
+      const fx = this.fxRate(t.currency || "USD", this.portfolio.currency);
+      if (fx == null) return null;
+      return (t.entry_price * t.shares * fx) / this.portfolio.value * 100;
+    },
+    posCellClass(t) {
+      const pct = this.livePosPct(t);
+      if (pct == null) return "";
+      return pct > this.maxPositionPct ? "pos-warn" : "";
+    },
+    editPortfolio() {
+      this.portfolioDraft = { ...this.portfolio };
+      this.editingPortfolio = true;
+      this.portfolioMsg = null;
+      this.$nextTick(() => {
+        if (this.$refs.portfolioInput) this.$refs.portfolioInput.focus();
+      });
+    },
+    cancelEditPortfolio() {
+      this.editingPortfolio = false;
+      this.portfolioMsg = null;
+    },
+    async savePortfolio() {
+      this.savingPortfolio = true;
+      this.portfolioMsg = null;
+      try {
+        const r = await put("/api/settings/portfolio", {
+          value: Number(this.portfolioDraft.value) || 0,
+          currency: (this.portfolioDraft.currency || "AUD").toUpperCase(),
+        });
+        this.portfolio = { value: Number(r.value) || 0, currency: r.currency };
+        this.editingPortfolio = false;
+        await Promise.all([this.loadTrades(), this.loadFx()]);
+        this.portfolioMsg = `Saved · recalculated ${r.recomputed || 0} open trades`;
+        this.portfolioMsgClass = "text-green";
+        setTimeout(() => { this.portfolioMsg = null; }, 3500);
+      } catch (e) {
+        this.portfolioMsg = `Error: ${e.message}`;
+        this.portfolioMsgClass = "text-red";
+      } finally {
+        this.savingPortfolio = false;
+      }
     },
     sortLog(col) { toggleSortState(this.logSort, col); },
     sortPerf(col) { toggleSortState(this.perfSort, col); },
@@ -108,7 +227,7 @@ export const Trades = {
         }
         this.message = "Saved";
         this.messageClass = "text-green";
-        await Promise.all([this.loadTrades(), this.loadPerf()]);
+        await Promise.all([this.loadTrades(), this.loadPerf(), this.loadFx()]);
         setTimeout(() => this.closeModal(), 600);
       } catch (e) {
         this.message = `Error: ${e.message}`;
@@ -143,6 +262,47 @@ export const Trades = {
   },
   template: `
     <div>
+      <div class="portfolio-bar">
+        <div v-if="!editingPortfolio" class="portfolio-display" @click="editPortfolio" title="Click to edit portfolio value">
+          <div class="portfolio-label">Portfolio</div>
+          <div class="portfolio-amount" v-if="portfolio.value">
+            {{ fmtMoney(portfolio.value) }}
+            <span class="portfolio-currency">{{ portfolio.currency }}</span>
+          </div>
+          <div class="portfolio-amount placeholder" v-else>
+            Click to set portfolio value
+          </div>
+          <div v-if="portfolioMsg" :class="portfolioMsgClass" class="portfolio-msg">{{ portfolioMsg }}</div>
+        </div>
+        <div v-else class="portfolio-editor">
+          <div class="portfolio-label">Portfolio</div>
+          <div class="portfolio-editor-row">
+            <input
+              ref="portfolioInput"
+              type="number"
+              step="0.01"
+              v-model.number="portfolioDraft.value"
+              class="portfolio-input"
+              @keydown.enter="savePortfolio"
+              @keydown.esc="cancelEditPortfolio">
+            <select v-model="portfolioDraft.currency" class="portfolio-currency-select">
+              <option value="AUD">AUD</option>
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="GBP">GBP</option>
+              <option value="NZD">NZD</option>
+              <option value="CAD">CAD</option>
+            </select>
+          </div>
+          <div class="portfolio-actions">
+            <button class="btn-primary" :disabled="savingPortfolio" @click="savePortfolio">
+              {{ savingPortfolio ? 'Saving…' : 'Save' }}
+            </button>
+            <button class="btn-ghost" @click="cancelEditPortfolio">Cancel</button>
+          </div>
+        </div>
+      </div>
+
       <div class="toolbar">
         <h1 style="margin: 0;">Trades</h1>
         <div class="spacer"></div>
@@ -185,7 +345,11 @@ export const Trades = {
                 <td>{{ fmtDate(t.entry_date) }}</td>
                 <td class="num">{{ fmtMoney(t.entry_price) }}</td>
                 <td class="num">{{ fmtNum(t.shares, 0) }}</td>
-                <td class="num">{{ t.position_size_pct ? t.position_size_pct + '%' : '—' }}</td>
+                <td class="num" :class="posCellClass(t)" :title="livePosPct(t) != null && livePosPct(t) > maxPositionPct ? 'Above max ' + maxPositionPct + '%' : ''">
+                  <template v-if="livePosPct(t) != null">{{ livePosPct(t).toFixed(2) }}%</template>
+                  <template v-else-if="t.position_size_pct">{{ t.position_size_pct }}%</template>
+                  <template v-else>—</template>
+                </td>
                 <td>{{ t.exit_date ? fmtDate(t.exit_date) : '—' }}</td>
                 <td class="num">{{ fmtMoney(t.exit_price) }}</td>
                 <td class="num" :class="{ 'text-green': t.pl_dollar > 0, 'text-red': t.pl_dollar < 0 }">
@@ -305,10 +469,6 @@ export const Trades = {
               </select>
             </div>
             <div class="field">
-              <label>Position Size %</label>
-              <input type="number" step="0.01" v-model.number="form.position_size_pct">
-            </div>
-            <div class="field">
               <label>Entry Date</label>
               <input type="date" v-model="form.entry_date">
             </div>
@@ -329,6 +489,59 @@ export const Trades = {
               <input type="number" step="0.0001" v-model.number="form.exit_price">
             </div>
           </div>
+
+          <div class="position-summary" v-if="portfolio.value">
+            <div class="position-summary-main">
+              <div class="position-stat">
+                <div class="stat-label">Position Size</div>
+                <div class="stat-value" :class="{ 'pos-warn-text': formPosOverMax }">
+                  <template v-if="formPosPct != null">{{ formPosPct.toFixed(2) }}%</template>
+                  <template v-else>—</template>
+                </div>
+                <div v-if="formPosOverMax" class="stat-note text-orange">
+                  Above max {{ maxPositionPct }}%
+                </div>
+              </div>
+              <div class="position-stat">
+                <div class="stat-label">Trade Cost ({{ (form.currency || 'USD').toUpperCase() }})</div>
+                <div class="stat-value">{{ fmtCcy(formCostTradeCcy, (form.currency || 'USD').toUpperCase()) }}</div>
+              </div>
+              <div class="position-stat" v-if="(form.currency || 'USD').toUpperCase() !== (portfolio.currency || 'AUD').toUpperCase()">
+                <div class="stat-label">Trade Cost ({{ (portfolio.currency || 'AUD').toUpperCase() }})</div>
+                <div class="stat-value">
+                  {{ fmtCcy(formCostBaseCcy, (portfolio.currency || 'AUD').toUpperCase()) }}
+                </div>
+                <div v-if="formFxRate != null" class="stat-note text-muted">
+                  {{ (form.currency || 'USD').toUpperCase() }}/{{ (portfolio.currency || 'AUD').toUpperCase() }} @ {{ (1 / formFxRate).toFixed(4) }}
+                </div>
+              </div>
+            </div>
+
+            <div class="position-reference" v-if="sizeReference.length">
+              <div class="reference-label">Reference — what each tier is worth:</div>
+              <table class="reference-table">
+                <thead>
+                  <tr>
+                    <th>%</th>
+                    <th class="num">{{ (portfolio.currency || 'AUD').toUpperCase() }}</th>
+                    <th class="num" v-if="(form.currency || 'USD').toUpperCase() !== (portfolio.currency || 'AUD').toUpperCase()">
+                      {{ (form.currency || 'USD').toUpperCase() }}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="r in sizeReference" :key="r.pct" :class="{ 'tier-max': r.isMax }">
+                    <td><strong>{{ r.pct }}%</strong><span v-if="r.isMax" class="text-orange" style="font-size: .75em; margin-left: .3rem;">max</span></td>
+                    <td class="num">{{ fmtCcy(r.inBase, r.baseCcy) }}</td>
+                    <td class="num" v-if="r.tradeCcy !== r.baseCcy">
+                      {{ r.inTrade != null ? fmtCcy(r.inTrade, r.tradeCcy) : '—' }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           <div class="field">
             <label>Notes</label>
             <textarea v-model="form.notes"></textarea>
