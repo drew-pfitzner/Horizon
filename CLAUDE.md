@@ -109,17 +109,6 @@ cd Horizon
 
 ---
 
-## Current State
-
-- ✅ All core endpoints working (market check, research, trades, valuation, smart money)
-- ✅ Vue.js frontend with responsive design (Mac desktop + iPhone via Tailscale)
-- ✅ Valuation calculator with correct equity multiplier formula, payout as %, MOS logic
-- ✅ Smart money integration (queries 118 gurus, 13F holdings)
-- ✅ Mobile layout fixed (topbar scrolls, tables don't overflow)
-- ✅ **Docker deployment** — one-command install (`install.sh` / `Install-Horizon.ps1`), auto-restart on crash/reboot
-- ✅ **Data backup/restore** — Settings tab → Export/Import JSON (full round-trip tested)
-- ✅ **Background smart money refresh** — Smart Money tab → "Update Data (SEC 13F)" button, streams progress, auto-refresh on done
-
 ## Development Workflow
 
 **Quick iteration (local venv):**
@@ -160,3 +149,15 @@ docker compose down             # Stop
 - Valuation formula: Equity Multiplier = (r/req)² + (d/req)×(1+r/req) where r=reinvested%, d=distributed%, req=required_return%
 - Payout inputs: Accept percentages (27, not 0.27); frontend converts ÷100 before API
 - MOS: Applies 10% discount to ROE only; payout stays at median
+
+## Pine Script (`horizon_signal.pine`)
+
+TradingView indicator that mirrors the Research view's Technicals checklist. Edge-triggered: fires on the first bar all conditions go true simultaneously.
+
+**Buy gates** (all must be true): RSI < 35 (Trade) or < 40 (Invest); RSI rising for N bars (`rsiTrendBars`, 0=off, 1=1 up-bar, 2+=N consecutive); Stoch %D < 20; %K > %D; volume > 10-bar MA (optional).
+
+**Sell gates**: RSI > 55 (Trade) or > 60 (Invest); Stoch %D > 80; %K < %D.
+
+**Stochastic defaults**: 14 / 1 / 3 (length / %K smoothing / %D) — matches TradingView's built-in Stoch so the chart's blue/orange lines = our internal `k`/`d`. Using %K smoothing > 1 causes a lag where smoothed %K stays below smoothed %D on the first up-bar off a bottom, suppressing buys after sharp drops.
+
+**Volume filter caveat**: A single huge spike (e.g. earnings) pulls the 10-bar MA up and can block buy signals on subsequent normal-volume recovery bars. Lengthen `volMaLen` or disable the filter when this matters.

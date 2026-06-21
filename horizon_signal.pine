@@ -1,0 +1,91 @@
+//@version=5
+// Horizon Signal — single-chart version.
+// Mirrors the Technicals checklist in Horizon's Research view.
+// Setup: add to chart, then create alert: Condition = "Horizon Signal",
+//        "Any alert() function call", Once Per Bar Close.
+indicator("Horizon Signal", overlay=true)
+
+// ───────────── Mode ─────────────
+mode     = input.string("Both",  "Alert on",  options=["Buy", "Sell", "Both"], group="Mode")
+buyKind  = input.string("Trade", "Buy kind",  options=["Trade", "Invest"], group="Mode",
+     tooltip="Trade entry: RSI < 35. Invest entry: RSI < 40.")
+sellKind = input.string("Trade", "Sell kind", options=["Trade", "Invest"], group="Mode",
+     tooltip="Trade exit: RSI > 55. Invest exit: RSI > 60.")
+
+// ───────────── RSI ─────────────
+rsiLen       = input.int(14, "RSI length", minval=2, group="RSI")
+rsiTradeMax  = input.int(35, "Buy: RSI max (Trade)", group="RSI")
+rsiInvestMax = input.int(40, "Buy: RSI max (Invest)", group="RSI")
+rsiTrendBars = input.int(2,  "Buy: RSI rising bars", minval=0, group="RSI",
+     tooltip="0 = no RSI trend check. 1 = today's RSI > yesterday's. 2+ = N consecutive up bars (each > previous).")
+rsiSellMinT  = input.int(55, "Sell: RSI min (Trade)", group="RSI",
+     tooltip="Horizon Trade exit: RSI > 55 (preferably > 70).")
+rsiSellMinI  = input.int(60, "Sell: RSI min (Invest)", group="RSI",
+     tooltip="Horizon Invest exit: RSI > 60 (preferably > 70).")
+
+// ───────────── Stochastic ─────────────
+stoK       = input.int(14, "Stoch %K length", group="Stochastic")
+stoSmoothK = input.int(1,  "Stoch %K smoothing", group="Stochastic")
+stoD       = input.int(3,  "Stoch %D length", group="Stochastic")
+stoBuyMax  = input.int(20, "Buy: Stoch slow (%D) max", group="Stochastic")
+stoSellMin = input.int(80, "Sell: Stoch slow (%D) min", group="Stochastic")
+
+// ───────────── Volume (Buy only) ─────────────
+useVolFilter = input.bool(true, "Buy: require volume > MA", group="Volume",
+     tooltip="Buy signal also requires current volume to exceed its moving average.")
+volMaLen     = input.int(10, "Volume MA length", minval=1, group="Volume")
+
+// ───────────── Calculations ─────────────
+rsiBuyMax  = buyKind  == "Trade" ? rsiTradeMax : rsiInvestMax
+rsiSellMin = sellKind == "Trade" ? rsiSellMinT : rsiSellMinI
+
+rsiVal = ta.rsi(close, rsiLen)
+rsiUp  = true
+if rsiTrendBars > 0
+    for i = 0 to rsiTrendBars - 1
+        rsiUp := rsiUp and (rsiVal[i] > rsiVal[i + 1])
+
+kRaw = ta.stoch(close, high, low, stoK)
+k    = ta.sma(kRaw, stoSmoothK)   // fast %K (smoothed)
+d    = ta.sma(k, stoD)            // slow %D
+
+volMa  = ta.sma(volume, volMaLen)
+volOk  = not useVolFilter or (volume > volMa)
+
+// State-based: fire on the first bar all conditions are simultaneously true.
+buyCond  = (rsiVal < rsiBuyMax)  and rsiUp and (d < stoBuyMax)  and (k > d) and volOk
+sellCond = (rsiVal > rsiSellMin) and              (d > stoSellMin) and (k < d)
+
+buySig  = buyCond  and not buyCond[1]
+sellSig = sellCond and not sellCond[1]
+
+showBuy  = mode != "Sell"
+showSell = mode != "Buy"
+
+// ───────────── Debug (Data Window) ─────────────
+plot(rsiVal < rsiBuyMax ? 1 : 0, "dbg rsi<max", display=display.data_window)
+plot(rsiUp              ? 1 : 0, "dbg rsiUp",   display=display.data_window)
+plot(d < stoBuyMax      ? 1 : 0, "dbg d<20",    display=display.data_window)
+plot(k > d              ? 1 : 0, "dbg k>d",     display=display.data_window)
+plot(volOk              ? 1 : 0, "dbg volOk",   display=display.data_window)
+plot(buyCond            ? 1 : 0, "dbg buyCond", display=display.data_window)
+plot(buyCond[1]         ? 1 : 0, "dbg prev",    display=display.data_window)
+plot(buySig             ? 1 : 0, "dbg buySig",  display=display.data_window)
+plot(rsiVal,                     "dbg rsiVal",  display=display.data_window)
+plot(k,                          "dbg k_val",   display=display.data_window)
+plot(d,                          "dbg d_val",   display=display.data_window)
+plot(volume,                     "dbg vol",     display=display.data_window)
+plot(volMa,                      "dbg volMa",   display=display.data_window)
+
+// ───────────── Visuals ─────────────
+plotshape(showBuy  and buySig,  title="Buy",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 0), size=size.small, text="BUY")
+plotshape(showSell and sellSig, title="Sell", style=shape.triangledown, location=location.abovebar, color=color.new(color.red,   0), size=size.small, text="SELL")
+
+// ───────────── Alerts ─────────────
+if showBuy and buySig
+    alert("Horizon BUY ("  + buyKind  + ") " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+if showSell and sellSig
+    alert("Horizon SELL (" + sellKind + ") " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+
+alertcondition(buySig,  title="Horizon Buy",  message="Horizon BUY {{ticker}} @ {{close}}")
+alertcondition(sellSig, title="Horizon Sell", message="Horizon SELL {{ticker}} @ {{close}}")
