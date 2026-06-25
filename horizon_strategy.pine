@@ -1,0 +1,103 @@
+//@version=5
+// Horizon Strategy — backtestable version of "Horizon Signal".
+// Same Technicals gates as horizon_signal.pine, but wired into the Strategy Tester.
+//   • Buy  signal  -> strategy.entry  (long only; pyramids if multiple buys fire)
+//   • Sell signal  -> strategy.close_all (dumps the whole position; no-op if flat)
+// Use TradingView's "Strategy Tester" tab to see performance and tune settings.
+strategy("Horizon Strategy", overlay=true,
+     pyramiding             = 100,                          // allow stacking buys (see "Max stacked buys")
+     initial_capital        = 10000,
+     commission_type        = strategy.commission.percent,
+     commission_value       = 0.0,
+     process_orders_on_close = true)                        // signals are bar-close, so fill on close
+
+// ───────────── Mode ─────────────
+// (No "Sell"/"Buy" only switch here — this is buy-to-enter, sell-to-exit by design.)
+buyKind  = input.string("Trade", "Buy kind",  options=["Trade", "Invest"], group="Mode",
+     tooltip="Trade entry: RSI < 35. Invest entry: RSI < 40.")
+sellKind = input.string("Trade", "Sell kind", options=["Trade", "Invest"], group="Mode",
+     tooltip="Trade exit: RSI > 55. Invest exit: RSI > 60.")
+
+// ───────────── Position sizing ─────────────
+qtyPct      = input.float(10, "Buy size (% of equity)", minval=0.1, group="Position",
+     tooltip="Each buy signal enters this % of current equity. With pyramiding, buys stack.")
+maxStacked  = input.int(100, "Max stacked buys", minval=1, group="Position",
+     tooltip="Hard cap on how many open buys can pile up before the next sell flushes them.")
+
+// ───────────── Risk ─────────────
+stopLossPct = input.float(0, "Stop loss (% below avg entry)", minval=0, step=0.5, group="Risk",
+     tooltip="0 = no stop. Otherwise flush the whole position if price falls this % below the average entry price. Recalculates as pyramided buys move the average. Triggers intrabar.")
+
+// ───────────── Backtest window (optional) ─────────────
+useDates  = input.bool(false, "Limit to date range", group="Backtest window")
+startDate = input.time(timestamp("2018-01-01"), "Start", group="Backtest window")
+endDate   = input.time(timestamp("2030-01-01"), "End",   group="Backtest window")
+inWindow  = not useDates or (time >= startDate and time <= endDate)
+
+// ───────────── RSI ─────────────
+rsiLen       = input.int(14, "RSI length", minval=2, group="RSI")
+rsiTradeMax  = input.int(35, "Buy: RSI max (Trade)", group="RSI")
+rsiInvestMax = input.int(40, "Buy: RSI max (Invest)", group="RSI")
+rsiTrendBars = input.int(1,  "Buy: RSI rising lookback", minval=0, group="RSI",
+     tooltip="Lookback (not consecutive). 0 = no RSI trend check. 1 = today's RSI > yesterday's. 2 = today's RSI > 2 bars ago. N = today's RSI > RSI N bars ago.")
+rsiSellMinT  = input.int(55, "Sell: RSI min (Trade)", group="RSI",
+     tooltip="Horizon Trade exit: RSI > 55 (preferably > 70).")
+rsiSellMinI  = input.int(60, "Sell: RSI min (Invest)", group="RSI",
+     tooltip="Horizon Invest exit: RSI > 60 (preferably > 70).")
+
+// ───────────── Stochastic ─────────────
+stoK       = input.int(14, "Stoch %K length", group="Stochastic")
+stoSmoothK = input.int(1,  "Stoch %K smoothing", group="Stochastic")
+stoD       = input.int(3,  "Stoch %D length", group="Stochastic")
+stoBuyMax  = input.int(20, "Buy: Stoch slow (%D) max", group="Stochastic")
+stoSellMin = input.int(80, "Sell: Stoch slow (%D) min", group="Stochastic")
+
+// ───────────── Volume (Buy only) ─────────────
+useVolFilter = input.bool(true, "Buy: require volume > MA", group="Volume",
+     tooltip="Buy signal also requires current volume to exceed its moving average.")
+volMaLen     = input.int(10, "Volume MA length", minval=1, group="Volume")
+
+// ───────────── Calculations ─────────────
+rsiBuyMax  = buyKind  == "Trade" ? rsiTradeMax : rsiInvestMax
+rsiSellMin = sellKind == "Trade" ? rsiSellMinT : rsiSellMinI
+
+rsiVal = ta.rsi(close, rsiLen)
+// Lookback (not consecutive): just compare now vs N bars ago.
+//   0 = off; 1 = RSI > yesterday's; 2 = RSI > 2 bars ago; etc.
+rsiUp  = rsiTrendBars == 0 or (rsiVal > rsiVal[rsiTrendBars])
+
+kRaw = ta.stoch(close, high, low, stoK)
+k    = ta.sma(kRaw, stoSmoothK)   // fast %K (smoothed)
+d    = ta.sma(k, stoD)            // slow %D
+
+volMa  = ta.sma(volume, volMaLen)
+volOk  = not useVolFilter or (volume > volMa)
+
+// State-based: fire on the first bar all conditions are simultaneously true.
+buyCond  = (rsiVal < rsiBuyMax)  and rsiUp and (d < stoBuyMax)  and (k > d) and volOk
+sellCond = (rsiVal > rsiSellMin) and              (d > stoSellMin) and (k < d)
+
+buySig  = buyCond  and not buyCond[1]
+sellSig = sellCond and not sellCond[1]
+
+// ───────────── Orders ─────────────
+canBuy = buySig and inWindow and (strategy.opentrades < maxStacked)
+if canBuy
+    // Size each buy as % of current equity, converted to whole shares.
+    shares = math.floor(strategy.equity * qtyPct / 100 / close)
+    if shares >= 1
+        // Unique entry id per stacked buy so pyramiding adds rather than reverses.
+        strategy.entry("Buy " + str.tostring(strategy.opentrades), strategy.long, qty=shares)
+
+if sellSig
+    strategy.close_all(comment="Sell")   // flush everything; no-op if already flat
+
+// Stop loss: flush the whole position if price falls stopLossPct below the average
+// entry. No from_entry id => applies to every stacked buy. Triggers intrabar.
+if stopLossPct > 0 and strategy.position_size > 0
+    stopPrice = strategy.position_avg_price * (1 - stopLossPct / 100)
+    strategy.exit("Stop", stop=stopPrice, comment="Stop")
+
+// ───────────── Visuals ─────────────
+plotshape(buySig,  title="Buy",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 0), size=size.small, text="BUY")
+plotshape(sellSig, title="Sell", style=shape.triangledown, location=location.abovebar, color=color.new(color.red,   0), size=size.small, text="SELL")
