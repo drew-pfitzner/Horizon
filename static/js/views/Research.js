@@ -26,6 +26,9 @@ export const Research = {
       saveError: null,
       pendingDelete: null,
       valuation: null,
+      prefilling: false,
+      prefillInfo: null,
+      prefillError: null,
       listSort: { key: "updated_at", dir: "desc" },
       smSort: { key: "weight", dir: "desc" },
       picker: { open: false, ticker: "", match: null, checked: false },
@@ -151,6 +154,32 @@ export const Research = {
         if (!data) return;
         if (force || !this.form.company_name) this.form.company_name = data.company_name || this.form.company_name;
       } catch (e) { console.error(e); }
+    },
+    // Full SEC/EDGAR prefill: fills the objective checklist flags + company name.
+    // Leaves technicals, notes and decision alone (those are your judgement).
+    async prefillResearch() {
+      const t = (this.form.ticker || "").trim().toUpperCase();
+      if (!t) return;
+      this.prefilling = true;
+      this.prefillError = null;
+      this.prefillInfo = null;
+      try {
+        const d = await get(`/api/prefill/${t}`);
+        if (d.company_name) this.form.company_name = d.company_name;
+        const flagKeys = [
+          "f_roa", "f_roe", "f_roi", "f_npm", "f_eps_5yr", "f_eps_1yr", "f_eps_next",
+          "f_sales_5yr", "f_current_ratio", "f_debt_equity",
+          "market_cap_ok", "sm_holding_5pct", "price_below_mos",
+        ];
+        for (const k of flagKeys) {
+          if (d.flags && k in d.flags) this.form[k] = !!d.flags[k];
+        }
+        this.prefillInfo = d;
+      } catch (e) {
+        this.prefillError = e.message;
+      } finally {
+        this.prefilling = false;
+      }
     },
     async fetchSmartMoney() {
       const t = (this.form.ticker || "").trim().toUpperCase();
@@ -292,6 +321,26 @@ export const Research = {
           <button @click="cancel" style="margin-left: 0.5rem;">Cancel</button>
         </div>
 
+        <div class="card" v-if="prefillError" style="border-left: 4px solid var(--red); padding: 0.6rem 0.9rem;">
+          <span class="text-red">Prefill: {{ prefillError }}</span>
+        </div>
+        <div class="card" v-if="prefillInfo" style="border-left: 4px solid var(--accent); padding: 0.6rem 0.9rem;">
+          <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; font-size: 0.85rem;">
+            <strong>Prefilled from SEC EDGAR</strong>
+            <span class="text-muted">Price {{ fmtMoney(prefillInfo.price) }} <span v-if="prefillInfo.price_src">[{{ prefillInfo.price_src }}]</span></span>
+            <span v-if="prefillInfo.verdict" :class="prefillInfo.verdict.startsWith('CAN') ? 'text-green' : (prefillInfo.verdict.startsWith('VETO') ? 'text-red' : 'text-muted')" style="font-weight: 600;">▶ {{ prefillInfo.verdict }}</span>
+          </div>
+          <div v-if="prefillInfo.financial" class="text-red" style="font-size: 0.8rem; margin-top: 0.35rem;">
+            ⚠ Financial sector ({{ prefillInfo.sic_desc }}) — equity-multiple valuation does not apply; skip until a bank method is defined.
+          </div>
+          <div v-else-if="prefillInfo.veto" class="text-red" style="font-size: 0.8rem; margin-top: 0.35rem;">
+            ⚠ Valuation vetoed — {{ prefillInfo.veto_reason }}.
+          </div>
+          <div class="text-muted" style="font-size: 0.78rem; margin-top: 0.35rem;">
+            Fundamentals + Price&lt;MOS auto-filled. Still check manually: <strong>Technicals</strong> (TradingView), <strong>Top 3 SM Increasing</strong>, liquidity. EPS-next is an estimate.
+          </div>
+        </div>
+
         <div class="grid-2">
           <div class="card">
             <h3>Stock</h3>
@@ -301,7 +350,7 @@ export const Research = {
                 <input type="text" v-model="form.ticker" @blur="onTickerBlur" placeholder="AAPL">
               </div>
               <div class="field">
-                <label>Company <button type="button" class="btn-ghost" style="font-size: 0.75rem; padding: 0 0.4rem; margin-left: 0.4rem;" :disabled="!form.ticker" @click="prefillCompany(true)" title="Refetch from SEC/local sources">Prefill</button></label>
+                <label>Company <button type="button" class="btn-ghost" style="font-size: 0.75rem; padding: 0 0.4rem; margin-left: 0.4rem;" :disabled="!form.ticker || prefilling" @click="prefillResearch()" title="Auto-fill fundamentals from SEC EDGAR">{{ prefilling ? 'Prefilling…' : 'Prefill' }}</button></label>
                 <input type="text" v-model="form.company_name">
               </div>
               <div class="field">

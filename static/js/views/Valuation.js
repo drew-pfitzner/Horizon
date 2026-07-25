@@ -16,6 +16,9 @@ export const Valuation = {
       result: null,
       saving: false,
       saveError: null,
+      prefilling: false,
+      prefillNote: null,
+      prefillError: null,
     };
   },
   computed: {
@@ -117,6 +120,37 @@ export const Valuation = {
         if (force || !this.form.company_name) this.form.company_name = data.company_name || this.form.company_name;
       } catch (e) { console.error(e); }
     },
+    // Full SEC/EDGAR prefill of the valuation inputs (ROE, payout, equity, shares, price).
+    async prefillFinancials() {
+      const t = (this.form.ticker || "").trim().toUpperCase();
+      if (!t) return;
+      this.prefilling = true;
+      this.prefillError = null;
+      this.prefillNote = null;
+      try {
+        const d = await get(`/api/prefill/${t}`);
+        if (d.company_name && !this.form.company_name) this.form.company_name = d.company_name;
+        const v = d.valuation || {};
+        const keys = [
+          "current_price", "required_return", "total_equity_m", "shares_outstanding_m",
+          ...ROE_KEYS, ...PAYOUT_KEYS,
+        ];
+        for (const k of keys) {
+          if (k in v && v[k] != null) this.form[k] = v[k];
+        }
+        if (d.financial) {
+          this.prefillNote = `⚠ Financial sector (${d.sic_desc}) — equity-multiple doesn't apply; values are reference only.`;
+        } else if (d.veto) {
+          this.prefillNote = `⚠ ${d.veto_reason}`;
+        } else {
+          this.prefillNote = `Prefilled from SEC EDGAR · shares [${d.shares_src || "—"}], price [${d.price_src || "—"}]. Verify before saving.`;
+        }
+      } catch (e) {
+        this.prefillError = e.message;
+      } finally {
+        this.prefilling = false;
+      }
+    },
     fmtRoe(v) { return v == null ? "—" : `${Number(v).toFixed(2)}%`; },
   },
   mounted() {
@@ -137,6 +171,13 @@ export const Valuation = {
         <button @click="backToResearch()" style="margin-left: 0.5rem;">Cancel</button>
       </div>
 
+      <div class="card" v-if="prefillError" style="border-left: 4px solid var(--red); padding: 0.6rem 0.9rem;">
+        <span class="text-red">Prefill: {{ prefillError }}</span>
+      </div>
+      <div class="card" v-if="prefillNote" style="border-left: 4px solid var(--accent); padding: 0.6rem 0.9rem; font-size: 0.85rem;">
+        {{ prefillNote }}
+      </div>
+
       <div class="grid-2">
         <div class="card">
           <h3>Inputs</h3>
@@ -146,7 +187,7 @@ export const Valuation = {
               <input type="text" v-model="form.ticker" @blur="loadLatest()" placeholder="ADBE">
             </div>
             <div class="field">
-              <label>Company <button type="button" class="btn-ghost" style="font-size: 0.75rem; padding: 0 0.4rem; margin-left: 0.4rem;" :disabled="!form.ticker" @click="prefillCompany(true)" title="Refetch from SEC/local sources">Prefill</button></label>
+              <label>Company <button type="button" class="btn-ghost" style="font-size: 0.75rem; padding: 0 0.4rem; margin-left: 0.4rem;" :disabled="!form.ticker || prefilling" @click="prefillFinancials()" title="Auto-fill ROE / payout / equity / shares / price from SEC EDGAR">{{ prefilling ? 'Prefilling…' : 'Prefill' }}</button></label>
               <input type="text" v-model="form.company_name" placeholder="Adobe Inc.">
             </div>
             <div class="field">

@@ -150,6 +150,27 @@ docker compose down             # Stop
 - Payout inputs: Accept percentages (27, not 0.27); frontend converts ÷100 before API
 - MOS: Applies 10% discount to ROE only; payout stays at median
 
+## Terminal research script (`research_cli.py`)
+
+Standalone stdlib CLI (no Flask/deps) that reproduces the Research view from SEC EDGAR, for sanity-checking a ticker before finviz/TradingView. `python3 research_cli.py GOOG AAPL [--price N] [--required N] [--json]`.
+
+Pulls XBRL company facts → 10-item Fundamentals checklist + score, SM holding (from local `smart_money.db`), and the equity-multiple valuation using the exact `routes/valuation.py` formula. Price from Yahoo chart API (Stooq fallback). Prints CAN TRADE / CAN INVEST / NO ACTION / VETOED / SKIP.
+
+**Method details:**
+- **ROE uses average equity** ((prior+current)/2), matching finviz/the app — not ending equity.
+- **Shares = Yahoo `impliedSharesOutstanding`** (all classes) so dual-class names (GOOG/BRK/V) get the correct total. companyfacts only exposes undimensioned facts, so multi-class SEC share/EPS counts are stale/partial; Yahoo is the authoritative total. See memory `dual-class-shares-valuation`.
+- **EPS growth** uses reported diluted EPS; falls back to net-income/diluted-shares, then net-income growth (tagged `(NI/sh)`/`(NI)`) for filers like VISA that report EPS only by share class.
+- **EPS Growth Next Yr** is a forward analyst estimate from Yahoo `earningsTrend` (undocumented, crumb-auth, uneven coverage) — shown with `~` marker, **not scored, not in the trade gate**.
+
+**Vetoes / skips (equity-multiple doesn't apply):**
+- **Negative book equity** → VETOED.
+- **Median ROE > 50%** → VETOED (buybacks shrink equity to a sliver, exploding the multiplier into nonsense, e.g. AAPL/NVDA/HD). Blunt cutoff: borderline names just under it (KO ~43%, V ~46%, NFLX ~38%) still produce shaky valuations — treat high-ROE-but-passing valuations with caution.
+- **Financial sector (SIC 6000–6799: banks/insurers/brokers/REITs)** → SKIP. The equity-multiple model needs a dedicated bank valuation method. **Avoid trading financials via this tool until that method is defined** (user to provide). Detected by SIC from SEC submissions; software-for-banks (e.g. JKHY, SIC 7372) is correctly *not* flagged.
+
+**Unsupported:** IFRS / foreign 20-F filers (e.g. SAP) report under `ifrs-full`, not `us-gaap` — returns a clear "not supported" message. Foreign filers that file 10-K in us-gaap (CHKP, ACN, GRMN) work fine.
+
+**App integration (Prefill):** `research_cli.py` is also the shared engine behind the app's Prefill. `analyze()` returns a rich dict; `to_horizon_prefill()` maps it to Horizon form fields (checklist flags keyed by DB column name + `roe1..5`/`payout1..5` latest-first with payout as %). `routes/prefill.py` exposes `GET /api/prefill/<ticker>`. The **Prefill** button in the Research view fills the fundamentals checklist + Price<MOS (leaves technicals/notes/decision alone); the one in the Valuation view fills ROE/payout/equity/shares/price. Both show a banner with verdict + financial/veto warnings. Network-bound (SEC + Yahoo), so it's an explicit button click, not on-blur. Payout is emitted as % (form divides by 100 before the API), and non-dividend years are 0 (not omitted) so the 5-yr median isn't skewed.
+
 ## Pine Script (`horizon_signal.pine`)
 
 TradingView indicator that mirrors the Research view's Technicals checklist. Edge-triggered: fires on the first bar all conditions go true simultaneously.
