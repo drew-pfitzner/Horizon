@@ -474,7 +474,7 @@ def analyze(ticker, price_override=None, required=10.0):
             val = valuation(roes, payouts, latest_equity / 1e6, sh / 1e6, price, required)
             if val and val["roe_median"] > ROE_SANITY_CAP:
                 veto = True
-                veto_reason = f"median ROE {val['roe_median']:.0f}% — book equity too thin (buyback-distorted); valuation unreliable"
+                veto_reason = f"buyback-distorted book equity (median ROE {val['roe_median']:.0f}%)"
 
     # a vetoed/unreliable valuation must NOT feed a false 'undervalued' signal
     price_below_mos = bool(not veto and val and price is not None

@@ -161,6 +161,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-danger { background: var(--red); border-color: var(--red); color: #fff; }
 .btn-ghost { background: transparent; }
 
+/* Edit-view action bar (Prefill / Clear / Save / Cancel) */
+.edit-actions { display: flex; align-items: stretch; gap: 0.4rem; }
+.edit-actions button { white-space: nowrap; }
+.edit-actions .divider { width: 1px; align-self: stretch; background: var(--border); margin: 0 0.15rem; }
+@media (max-width: 768px) {
+  .edit-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; width: 100%; }
+  .edit-actions button { width: 100%; padding: 0.65rem 0.5rem; }
+  .edit-actions .divider { display: none; }
+}
+
+/* Prefill result banner */
+.prefill-banner { border-left: 4px solid var(--accent); padding: 0.55rem 0.9rem; }
+.prefill-banner .banner-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; font-size: 0.85rem; }
+.prefill-banner .banner-detail { font-size: 0.78rem; margin-top: 0.3rem; }
+.prefill-banner .banner-note { font-size: 0.76rem; margin-top: 0.3rem; }
+
 /* Tables */
 .table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .table th, .table td { text-align: left; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--border); }

@@ -52,6 +52,15 @@ export const Research = {
     },
     isEdit() { return this.mode === "edit"; },
     isNew() { return this.mode === "new"; },
+    // Map the CLI verdict string to a compact result pill (badge color + label).
+    prefillBadge() {
+      const v = (this.prefillInfo && this.prefillInfo.verdict) || "";
+      if (v.startsWith("CAN TRADE")) return { label: "Can Trade", color: "green" };
+      if (v.startsWith("CAN INVEST")) return { label: "Can Invest", color: "green" };
+      if (v.startsWith("SKIP")) return { label: "Financial", color: "yellow" };
+      if (v.startsWith("VETOED")) return { label: "Valuation N/A", color: "red" };
+      return { label: "No Action", color: "yellow" };
+    },
     criticalCriteria() {
       const can_trade = this.form.f_roe && this.form.f_npm && this.form.sm_holding_5pct;
       return {
@@ -88,6 +97,7 @@ export const Research = {
       this.valuation = null;
       this.saveError = null;
       this.mode = "new";
+      this.scrollTop();
       if (this.form.ticker) {
         // Kick off background lookups so company / valuation / SM data populate.
         this.fetchSmartMoney();
@@ -141,8 +151,12 @@ export const Research = {
       this.valuation = null;
       this.saveError = null;
       this.mode = "edit";
+      this.scrollTop();
       this.fetchSmartMoney();
       this.fetchValuation();
+    },
+    scrollTop() {
+      this.$nextTick(() => window.scrollTo({ top: 0, behavior: "auto" }));
     },
     cancel() { this.mode = "list"; this.smHolders = null; this.saveError = null; },
     async onTickerBlur() {
@@ -211,6 +225,20 @@ export const Research = {
         this.valuationPreview = true;
         this.prefillValuationInputs = { ...p, company_name: d.company_name || this.form.company_name };
       } catch (e) { console.error(e); }
+    },
+    // Clear the objective/data-driven sections — fundamentals, company size /
+    // smart money / liquidity flags, and the valuation summary — so you can
+    // re-prefill or fill by hand from a clean slate. Keeps ticker, company name,
+    // date, decision, notes and the smart-money lookup table untouched.
+    clearFields() {
+      FUND_FIELDS.forEach(([k]) => { this.form[k] = false; });
+      ["market_cap_ok", "sm_holding_5pct", "sm_top3_increasing", "liquidity_ok", "price_below_mos"]
+        .forEach(k => { this.form[k] = false; });
+      this.valuation = null;
+      this.valuationPreview = false;
+      this.prefillValuationInputs = null;
+      this.prefillInfo = null;
+      this.prefillError = null;
     },
     // Discard the prefilled (unsaved) valuation preview and restore any saved one.
     resetPrefilledValuation() {
@@ -374,29 +402,39 @@ export const Research = {
           <h1 style="margin: 0;">{{ isEdit ? form.ticker + ' — Edit' : 'New Research' }}</h1>
           <div class="spacer"></div>
           <span v-if="saveError" class="text-red" style="font-size: 0.85rem; margin-right: 0.5rem;">{{ saveError }}</span>
-          <button class="btn-primary" :disabled="saving || !form.ticker" @click="saveAndReturn">
-            {{ saving ? 'Saving…' : 'Save & Return' }}
-          </button>
-          <button @click="cancel" style="margin-left: 0.5rem;">Cancel</button>
+          <div class="edit-actions">
+            <button class="btn-ghost" :disabled="!form.ticker || prefilling" @click="prefillResearch()"
+                    title="Auto-fill fundamentals, company/SM/liquidity flags and valuation from SEC EDGAR">
+              {{ prefilling ? 'Prefilling…' : '⚡ Prefill' }}
+            </button>
+            <button class="btn-ghost" @click="clearFields"
+                    title="Clear fundamentals, company size / smart money / liquidity, and valuation (keeps ticker & company)">
+              Clear
+            </button>
+            <span class="divider"></span>
+            <button class="btn-primary" :disabled="saving || !form.ticker" @click="saveAndReturn">
+              {{ saving ? 'Saving…' : 'Save & Return' }}
+            </button>
+            <button @click="cancel">Cancel</button>
+          </div>
         </div>
 
         <div class="card" v-if="prefillError" style="border-left: 4px solid var(--red); padding: 0.6rem 0.9rem;">
           <span class="text-red">Prefill: {{ prefillError }}</span>
         </div>
-        <div class="card" v-if="prefillInfo" style="border-left: 4px solid var(--accent); padding: 0.6rem 0.9rem;">
-          <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; font-size: 0.85rem;">
-            <strong>Prefilled from SEC EDGAR</strong>
-            <span class="text-muted">Price {{ fmtMoney(prefillInfo.price) }} <span v-if="prefillInfo.price_src">[{{ prefillInfo.price_src }}]</span></span>
-            <span v-if="prefillInfo.verdict" :class="prefillInfo.verdict.startsWith('CAN') ? 'text-green' : (prefillInfo.verdict.startsWith('VETO') ? 'text-red' : 'text-muted')" style="font-weight: 600;">▶ {{ prefillInfo.verdict }}</span>
+        <div class="card prefill-banner" v-if="prefillInfo">
+          <div class="banner-head">
+            <strong>⚡ Prefilled</strong>
+            <span class="badge" :class="prefillBadge.color">{{ prefillBadge.label }}</span>
           </div>
-          <div v-if="prefillInfo.financial" class="text-red" style="font-size: 0.8rem; margin-top: 0.35rem;">
-            ⚠ Financial sector ({{ prefillInfo.sic_desc }}) — equity-multiple valuation does not apply; skip until a bank method is defined.
+          <div v-if="prefillInfo.financial" class="text-red banner-detail">
+            Financial sector ({{ prefillInfo.sic_desc }}) — equity-multiple model doesn't apply.
           </div>
-          <div v-else-if="prefillInfo.veto" class="text-red" style="font-size: 0.8rem; margin-top: 0.35rem;">
-            ⚠ Valuation vetoed — {{ prefillInfo.veto_reason }}.
+          <div v-else-if="prefillInfo.veto" class="text-red banner-detail">
+            Valuation skipped — {{ prefillInfo.veto_reason }}.
           </div>
-          <div class="text-muted" style="font-size: 0.78rem; margin-top: 0.35rem;">
-            Fundamentals + Price&lt;MOS auto-filled. Still check manually: <strong>Technicals</strong> (TradingView), <strong>Top 3 SM Increasing</strong>, liquidity. EPS-next is an estimate.
+          <div class="text-muted banner-note">
+            Always double-check technicals, smart-money trend &amp; liquidity before trading.
           </div>
         </div>
 
@@ -409,7 +447,7 @@ export const Research = {
                 <input type="text" v-model="form.ticker" @blur="onTickerBlur" placeholder="AAPL">
               </div>
               <div class="field">
-                <label>Company <button type="button" class="btn-ghost" style="font-size: 0.75rem; padding: 0 0.4rem; margin-left: 0.4rem;" :disabled="!form.ticker || prefilling" @click="prefillResearch()" title="Auto-fill fundamentals from SEC EDGAR">{{ prefilling ? 'Prefilling…' : 'Prefill' }}</button></label>
+                <label>Company</label>
                 <input type="text" v-model="form.company_name">
               </div>
               <div class="field">
