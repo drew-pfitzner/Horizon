@@ -565,6 +565,9 @@ def to_horizon_prefill(a):
         "price": a.get("price"), "price_src": a.get("price_src"),
         "shares_src": a.get("shares_src"),
         "assessment": a["val"]["assessment"] if a.get("val") else None,
+        # A buyback-distorted veto still produces a real (if inflated) valuation,
+        # so the UI can show the numbers for reference; negative-equity has none.
+        "has_valuation": bool(a.get("val")),
         "veto": a.get("veto", False), "veto_reason": a.get("veto_reason"),
         "eps_next": en,
         "flags": flags, "details": details,

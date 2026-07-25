@@ -201,10 +201,12 @@ export const Research = {
     // Compute a live valuation from the prefill inputs so the Valuation Summary
     // shows the numbers Prefill used. The preview is stashed and persisted only
     // when you save the research (see _persistPrefilledValuation). Skipped for
-    // financials / vetoed names.
+    // financials and vetoes with no usable valuation (negative book equity); a
+    // buyback-distorted veto still has a real valuation, so we show it with a
+    // warning banner. The price_below_mos trade-gate flag stays false regardless.
     async previewFromPrefill(d) {
       const v = d && d.valuation;
-      if (!v || d.financial || d.veto) return;
+      if (!v || d.financial || !d.has_valuation) return;
       const p = {
         current_price: v.current_price,
         required_return: v.required_return,
@@ -429,6 +431,10 @@ export const Research = {
           </div>
           <div v-if="prefillInfo.financial" class="text-red banner-detail">
             Financial sector ({{ prefillInfo.sic_desc }}) — equity-multiple model doesn't apply.
+          </div>
+          <div v-else-if="prefillInfo.veto && prefillInfo.has_valuation" class="text-red banner-detail">
+            ⚠ {{ prefillInfo.veto_reason }} — valuation shown below for reference, but
+            treat any "undervalued" reading with caution. Price&lt;MOS stays unchecked.
           </div>
           <div v-else-if="prefillInfo.veto" class="text-red banner-detail">
             Valuation skipped — {{ prefillInfo.veto_reason }}.
