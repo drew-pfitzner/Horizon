@@ -27,6 +27,7 @@ export const Research = {
       pendingDelete: null,
       valuation: null,
       valuationPreview: false,
+      prefillValuationInputs: null,  // stashed raw inputs; persisted when research is saved
       prefilling: false,
       prefillInfo: null,
       prefillError: null,
@@ -184,8 +185,9 @@ export const Research = {
       }
     },
     // Compute a live valuation from the prefill inputs so the Valuation Summary
-    // shows the numbers Prefill used (not saved — the DB is untouched until you
-    // open + save the valuation). Skipped for financials / vetoed names.
+    // shows the numbers Prefill used. The preview is stashed and persisted only
+    // when you save the research (see _persistPrefilledValuation). Skipped for
+    // financials / vetoed names.
     async previewFromPrefill(d) {
       const v = d && d.valuation;
       if (!v || d.financial || d.veto) return;
@@ -207,6 +209,32 @@ export const Research = {
         const result = await post("/api/valuation/preview", p);
         this.valuation = { ...result, current_price: v.current_price };
         this.valuationPreview = true;
+        this.prefillValuationInputs = { ...p, company_name: d.company_name || this.form.company_name };
+      } catch (e) { console.error(e); }
+    },
+    // Discard the prefilled (unsaved) valuation preview and restore any saved one.
+    resetPrefilledValuation() {
+      this.prefillValuationInputs = null;
+      this.valuationPreview = false;
+      this.fetchValuation();
+    },
+    // Persist a prefilled valuation preview when the research is saved, linking it
+    // to the research record. No-op if nothing was prefilled or it's already saved.
+    async _persistPrefilledValuation() {
+      if (!this.prefillValuationInputs) return;
+      const t = (this.form.ticker || "").trim().toUpperCase();
+      if (!t) return;
+      try {
+        const body = {
+          ...this.prefillValuationInputs,
+          ticker: t,
+          valuation_date: isoToday(),
+        };
+        if (this.form.id) body.research_id = this.form.id;
+        const saved = await post("/api/valuation", body);
+        this.valuation = saved || this.valuation;
+        this.valuationPreview = false;
+        this.prefillValuationInputs = null;
       } catch (e) { console.error(e); }
     },
     async fetchSmartMoney() {
@@ -256,6 +284,8 @@ export const Research = {
         // Update form id in case this was a new record, without full editForm reset
         this.form.id = data.id;
         this.mode = "edit";
+        // Persist any prefilled valuation preview, now that we have a research id to link.
+        await this._persistPrefilledValuation();
         return true;
       } catch (e) {
         this.saveError = e.message;
@@ -509,8 +539,9 @@ export const Research = {
           </div>
           <div class="toolbar">
             <button @click="openValuation" :disabled="!form.ticker || saving">{{ saving ? 'Saving...' : 'Edit Valuation →' }}</button>
+            <button v-if="valuationPreview" class="btn-ghost" @click="resetPrefilledValuation" :disabled="saving" title="Discard the prefilled valuation">Reset</button>
             <span class="text-muted" v-if="!valuation">No valuation saved yet — clicking Edit Valuation will save your research first.</span>
-            <span class="text-muted" v-else-if="valuationPreview">From Prefill (not saved) — open Edit Valuation to review the inputs and save.</span>
+            <span class="text-muted" v-else-if="valuationPreview">From Prefill — saves automatically when you save this research (or use Edit Valuation).</span>
             <span class="text-muted" v-else>Last saved: {{ valuation.valuation_date }}</span>
           </div>
         </div>

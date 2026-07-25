@@ -138,6 +138,9 @@ export const Valuation = {
         for (const k of keys) {
           if (k in v && v[k] != null) this.form[k] = v[k];
         }
+        // Force the results to compute now — don't rely solely on the form
+        // watcher firing after a batch of programmatic assignments.
+        await this.recompute();
         if (d.financial) {
           this.prefillNote = `⚠ Financial sector (${d.sic_desc}) — equity-multiple doesn't apply; values are reference only.`;
         } else if (d.veto) {
@@ -152,6 +155,17 @@ export const Valuation = {
       }
     },
     fmtRoe(v) { return v == null ? "—" : `${Number(v).toFixed(2)}%`; },
+    // Clear the inputs (ROE / payout / equity / shares / price) if the prefilled
+    // numbers look wrong. Keeps ticker + company so you can re-Prefill or re-enter.
+    resetForm() {
+      const t = this.form.ticker, name = this.form.company_name;
+      this.form = this._initForm();
+      this.form.ticker = t;
+      this.form.company_name = name;
+      this.result = null;
+      this.prefillNote = null;
+      this.prefillError = null;
+    },
   },
   mounted() {
     if (this.ticker) {
@@ -168,6 +182,7 @@ export const Valuation = {
         <button class="btn-primary" :disabled="!canSave || saving" @click="saveAndReturn">
           {{ saving ? 'Saving…' : 'Save & Return' }}
         </button>
+        <button @click="resetForm()" style="margin-left: 0.5rem;" title="Clear ROE / payout / equity / shares / price">Reset</button>
         <button @click="backToResearch()" style="margin-left: 0.5rem;">Cancel</button>
       </div>
 
