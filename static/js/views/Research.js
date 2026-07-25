@@ -26,6 +26,7 @@ export const Research = {
       saveError: null,
       pendingDelete: null,
       valuation: null,
+      valuationPreview: false,
       prefilling: false,
       prefillInfo: null,
       prefillError: null,
@@ -175,11 +176,38 @@ export const Research = {
           if (d.flags && k in d.flags) this.form[k] = !!d.flags[k];
         }
         this.prefillInfo = d;
+        await this.previewFromPrefill(d);
       } catch (e) {
         this.prefillError = e.message;
       } finally {
         this.prefilling = false;
       }
+    },
+    // Compute a live valuation from the prefill inputs so the Valuation Summary
+    // shows the numbers Prefill used (not saved — the DB is untouched until you
+    // open + save the valuation). Skipped for financials / vetoed names.
+    async previewFromPrefill(d) {
+      const v = d && d.valuation;
+      if (!v || d.financial || d.veto) return;
+      const p = {
+        current_price: v.current_price,
+        required_return: v.required_return,
+        total_equity_m: v.total_equity_m,
+        shares_outstanding_m: v.shares_outstanding_m,
+      };
+      let hasRoe = false;
+      for (let i = 1; i <= 5; i++) {
+        p[`roe${i}`] = v[`roe${i}`];
+        // prefill emits payout as % (e.g. 27); the API expects a decimal (0.27)
+        p[`payout${i}`] = v[`payout${i}`] != null ? v[`payout${i}`] / 100 : null;
+        if (v[`roe${i}`] != null) hasRoe = true;
+      }
+      if (!hasRoe || !(Number(p.shares_outstanding_m) > 0)) return;
+      try {
+        const result = await post("/api/valuation/preview", p);
+        this.valuation = { ...result, current_price: v.current_price };
+        this.valuationPreview = true;
+      } catch (e) { console.error(e); }
     },
     async fetchSmartMoney() {
       const t = (this.form.ticker || "").trim().toUpperCase();
@@ -199,6 +227,7 @@ export const Research = {
       try {
         const data = await get(`/api/valuation/${t}`);
         this.valuation = data || null;
+        this.valuationPreview = false;
       } catch (e) {
         console.error(e);
         this.valuation = null;
@@ -481,6 +510,7 @@ export const Research = {
           <div class="toolbar">
             <button @click="openValuation" :disabled="!form.ticker || saving">{{ saving ? 'Saving...' : 'Edit Valuation →' }}</button>
             <span class="text-muted" v-if="!valuation">No valuation saved yet — clicking Edit Valuation will save your research first.</span>
+            <span class="text-muted" v-else-if="valuationPreview">From Prefill (not saved) — open Edit Valuation to review the inputs and save.</span>
             <span class="text-muted" v-else>Last saved: {{ valuation.valuation_date }}</span>
           </div>
         </div>
