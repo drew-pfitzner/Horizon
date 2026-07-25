@@ -18,4 +18,7 @@ services:
       - HORIZON_DB_PATH=/app/data/horizon.db
       - SEC_IDENTITY=${SEC_IDENTITY:-}
       - HORIZON_IN_DOCKER=1
+      # Optional: your computer's LAN IP, so Settings can show a scannable
+      # "connect from your phone" QR code when viewing via localhost.
+      - HORIZON_HOST_IP=${HORIZON_HOST_IP:-}
     restart: unless-stopped

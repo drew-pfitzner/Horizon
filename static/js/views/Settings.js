@@ -375,12 +375,15 @@ export const Settings = {
       return dt.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
     },
     // Address other devices on the same network can use to reach this server.
-    // IP comes from the backend; port/protocol from how you reached the app
-    // (so Docker/Tailscale port mappings are reflected correctly).
+    // If you already reached the app via a real network address, that same URL
+    // works for other devices — so just use the current origin. Only when you're
+    // on localhost do we fall back to the server-detected LAN IP.
     shareUrl() {
+      const loc = window.location;
+      const isLocal = /^(localhost|127\.|0\.0\.0\.0|\[?::1\]?)$/.test(loc.hostname);
+      if (!isLocal) return loc.origin;
       const ip = this.access && this.access.lan_ip;
       if (!ip) return null;
-      const loc = window.location;
       const port = loc.port ? `:${loc.port}` : "";
       return `${loc.protocol}//${ip}${port}`;
     },
@@ -422,9 +425,17 @@ export const Settings = {
             </div>
           </div>
         </template>
-        <p class="text-muted" v-else>
-          Couldn't determine this server's network address automatically.
-        </p>
+        <div class="text-muted" v-else>
+          <p style="margin-top: 0;">Couldn't determine a shareable network address.</p>
+          <p style="font-size: 0.85rem; margin-bottom: 0;" v-if="access && access.in_docker">
+            You're viewing this via <code>localhost</code> inside Docker, so the app can't see your computer's
+            network IP. Either open Horizon using your computer's IP (then this QR fills in automatically), or set
+            <code>HORIZON_HOST_IP</code> to your computer's address when starting the container.
+          </p>
+          <p style="font-size: 0.85rem; margin-bottom: 0;" v-else>
+            Open Horizon using your computer's network IP and this QR code will fill in automatically.
+          </p>
+        </div>
       </div>
 
       <div class="card" v-if="sysInfo">

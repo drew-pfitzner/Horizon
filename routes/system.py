@@ -15,8 +15,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def _lan_ip():
     """Best-effort primary LAN IPv4 for this host (the address other devices
-    on the same network would use). Uses a UDP socket to discover the outbound
-    interface without actually sending anything. Returns None if undetermined."""
+    on the same network would use). Returns None if undetermined.
+
+    Inside a container the auto-detected address is the container's bridge IP
+    (e.g. 172.18.0.2), which is NOT reachable from other devices — so we don't
+    guess there and instead require the host to pass HORIZON_HOST_IP. When not
+    containerized, a UDP socket reveals the outbound interface without actually
+    sending anything."""
+    override = os.getenv("HORIZON_HOST_IP")
+    if override:
+        return override.strip()
+    if _in_docker():
+        return None
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
