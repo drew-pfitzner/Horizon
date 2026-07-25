@@ -1,5 +1,6 @@
 import os
 import sys
+import socket
 import subprocess
 import threading
 import time
@@ -10,6 +11,21 @@ from flask import Blueprint, jsonify
 bp = Blueprint("system", __name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _lan_ip():
+    """Best-effort primary LAN IPv4 for this host (the address other devices
+    on the same network would use). Uses a UDP socket to discover the outbound
+    interface without actually sending anything. Returns None if undetermined."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        return ip if not ip.startswith("127.") else None
+    except Exception:
+        return None
+    finally:
+        s.close()
 
 
 def _in_docker() -> bool:
@@ -75,6 +91,16 @@ def info():
             },
         })
     return jsonify({"success": True, "data": _collect_info(fetch_first=False)})
+
+
+@bp.route("/access", methods=["GET"])
+def access():
+    """Server network identity so other devices on the same LAN can connect."""
+    return jsonify({"success": True, "data": {
+        "lan_ip": _lan_ip(),
+        "hostname": socket.gethostname(),
+        "in_docker": _in_docker(),
+    }})
 
 
 @bp.route("/check", methods=["POST"])

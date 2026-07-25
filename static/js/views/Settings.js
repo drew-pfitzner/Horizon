@@ -25,6 +25,8 @@ export const Settings = {
       smBackupMessageClass: "",
       smImporting: false,
       sysInfo: null,
+      access: null,
+      copyMessage: null,
       checkingUpdate: false,
       updating: false,
       sysMessage: null,
@@ -44,9 +46,26 @@ export const Settings = {
   async mounted() {
     await this.load();
     await this.loadSystem();
+    await this.loadAccess();
     await this.loadMaxAndFx();
   },
   methods: {
+    async loadAccess() {
+      try {
+        this.access = await get("/api/system/access");
+      } catch (e) {
+        this.access = null;
+      }
+    },
+    async copyShareUrl() {
+      try {
+        await navigator.clipboard.writeText(this.shareUrl);
+        this.copyMessage = "Copied";
+      } catch (e) {
+        this.copyMessage = "Copy failed";
+      }
+      setTimeout(() => { this.copyMessage = null; }, 2000);
+    },
     async load() {
       try {
         this.thresholds = await get("/api/settings/pullback-thresholds");
@@ -348,31 +367,81 @@ export const Settings = {
   },
   computed: {
     indicators() { return INDICATORS; },
+    lastUpdated() {
+      const d = this.sysInfo && this.sysInfo.date;
+      if (!d) return null;
+      const dt = new Date(d);
+      if (isNaN(dt)) return null;
+      return dt.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+    },
+    // Address other devices on the same network can use to reach this server.
+    // IP comes from the backend; port/protocol from how you reached the app
+    // (so Docker/Tailscale port mappings are reflected correctly).
+    shareUrl() {
+      const ip = this.access && this.access.lan_ip;
+      if (!ip) return null;
+      const loc = window.location;
+      const port = loc.port ? `:${loc.port}` : "";
+      return `${loc.protocol}//${ip}${port}`;
+    },
+    qrSvg() {
+      if (!this.shareUrl || typeof window.qrcode !== "function") return null;
+      try {
+        const qr = window.qrcode(0, "M");   // 0 = auto-size, M = medium error correction
+        qr.addData(this.shareUrl);
+        qr.make();
+        return qr.createSvgTag({ cellSize: 6, margin: 12, scalable: true });
+      } catch (e) {
+        return null;
+      }
+    },
   },
   template: `
     <div>
       <h1>Settings</h1>
 
+      <div class="grid-2">
+      <div class="card">
+        <h3>Connect from your phone</h3>
+        <template v-if="shareUrl">
+          <p class="text-muted">
+            On the same Wi-Fi network, scan this QR code (or open the link) to load Horizon on another device.
+          </p>
+          <div style="display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;">
+            <div v-if="qrSvg" v-html="qrSvg"
+                 style="width: 180px; height: 180px; background: #fff; padding: 8px; border-radius: 8px; flex-shrink: 0;"></div>
+            <div>
+              <div style="font-family: monospace; font-size: 1.05rem; margin-bottom: 0.6rem;">{{ shareUrl }}</div>
+              <div class="toolbar">
+                <button class="btn-ghost" @click="copyShareUrl">Copy Link</button>
+                <span class="text-green">{{ copyMessage }}</span>
+              </div>
+              <p class="text-muted" style="font-size: 0.8rem; margin: 0.5rem 0 0;">
+                Not connecting? Both devices must be on the same network. Over Tailscale, use your Tailscale IP instead.
+              </p>
+            </div>
+          </div>
+        </template>
+        <p class="text-muted" v-else>
+          Couldn't determine this server's network address automatically.
+        </p>
+      </div>
+
       <div class="card" v-if="sysInfo">
         <h3>App Updates</h3>
-        <p class="text-muted" v-if="!sysInfo.git_available">{{ sysInfo.message }}</p>
+        <p class="text-muted" v-if="!sysInfo.git_available">Automatic updates aren't available for this install.</p>
         <div v-else>
-          <div class="text-muted" style="margin-bottom: .5rem;">
-            Branch: <strong>{{ sysInfo.branch }}</strong> ·
-            Current: <code>{{ sysInfo.sha }}</code>
-            <span v-if="sysInfo.dirty" class="text-red"> (uncommitted changes)</span>
-            <span v-if="sysInfo.has_upstream && sysInfo.behind > 0" class="text-green">
-              · {{ sysInfo.behind }} behind origin
-            </span>
-            <span v-if="sysInfo.has_upstream && sysInfo.behind === 0" class="text-muted"> · up to date</span>
-          </div>
-          <div v-if="sysInfo.dirty && sysInfo.dirty_files && sysInfo.dirty_files.length"
-               class="text-muted" style="margin-bottom: .5rem; font-family: monospace; font-size: .85em;">
-            <div>Dirty files (blocking update):</div>
-            <div v-for="f in sysInfo.dirty_files" :key="f">&nbsp;&nbsp;{{ f }}</div>
-          </div>
-          <div class="text-muted" style="margin-bottom: 1rem;">
-            Latest commit: <em>{{ sysInfo.subject }}</em>
+          <div style="margin-bottom: 1rem;">
+            <div v-if="sysInfo.behind > 0" class="text-green" style="font-weight: 600; font-size: 1.05rem;">
+              {{ sysInfo.behind }} update{{ sysInfo.behind === 1 ? '' : 's' }} available
+            </div>
+            <div v-else style="font-weight: 600; font-size: 1.05rem;">✓ Horizon is up to date</div>
+            <div class="text-muted" style="font-size: 0.85rem; margin-top: 0.3rem;" v-if="lastUpdated">
+              Last updated {{ lastUpdated }}
+            </div>
+            <div class="text-muted" style="font-size: 0.85rem; margin-top: 0.3rem;" v-if="sysInfo.dirty">
+              Some local files have changed — automatic update is paused to avoid overwriting them.
+            </div>
           </div>
           <div class="toolbar">
             <button class="btn-ghost" :disabled="checkingUpdate || updating" @click="checkForUpdate">
@@ -386,6 +455,7 @@ export const Settings = {
             <span :class="sysMessageClass">{{ sysMessage }}</span>
           </div>
         </div>
+      </div>
       </div>
 
       <div class="card" v-if="thresholds">
