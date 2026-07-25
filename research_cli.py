@@ -326,7 +326,20 @@ def analyze(ticker, price_override=None, required=10.0):
 
     try:
         facts = _get_json(SEC_FACTS_URL.format(cik=cik))
-    except (URLError, HTTPError, TimeoutError, json.JSONDecodeError) as e:
+    except HTTPError as e:
+        if e.code == 404:
+            # CIK resolved but SEC has no XBRL company facts — characteristic of
+            # ETFs, mutual funds, and unit trusts, which don't file operating-
+            # company financials. The equity-multiple model doesn't apply to them.
+            fundish = any(w in (title or "").upper()
+                          for w in ("ETF", "TRUST", "FUND", "INDEX"))
+            what = "an ETF/fund" if fundish else "a fund or non-operating filer"
+            return {"ticker": ticker,
+                    "error": f"{ticker} ({title}) looks like {what} — SEC has no "
+                             "company financials to prefill. This tool only works "
+                             "for operating companies that file 10-Ks."}
+        return {"ticker": ticker, "error": f"could not fetch SEC facts: {e}"}
+    except (URLError, TimeoutError, json.JSONDecodeError) as e:
         return {"ticker": ticker, "error": f"could not fetch SEC facts: {e}"}
 
     sic, sic_desc = fetch_sic(cik)
