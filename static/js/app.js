@@ -5,7 +5,7 @@ import { Valuation } from "./views/Valuation.js";
 import { Trades } from "./views/Trades.js";
 import { SmartMoney } from "./views/SmartMoney.js";
 import { Settings } from "./views/Settings.js";
-import { get } from "./utils.js";
+import { get, isoToday } from "./utils.js";
 
 const { createApp } = Vue;
 const { createRouter, createWebHashHistory } = VueRouter;
@@ -46,7 +46,7 @@ const app = createApp({
   methods: {
     async loadGate() {
       try {
-        const data = await get("/api/market-check/today");
+        const data = await get(`/api/market-check/today?date=${isoToday()}`);
         this.gate = data;
       } catch (e) {
         console.error("loadGate", e);

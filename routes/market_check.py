@@ -78,7 +78,13 @@ def row_to_dict(r):
 
 @bp.route("/today", methods=["GET"])
 def get_today():
-    today = date.today().isoformat()
+    # Prefer the client's local date (browser TZ) so "today" tracks the user's
+    # wall clock, not the server's — the container typically runs UTC.
+    req_date = (request.args.get("date") or "").strip()
+    try:
+        today = date.fromisoformat(req_date).isoformat() if req_date else date.today().isoformat()
+    except ValueError:
+        today = date.today().isoformat()
     with get_db() as db:
         row = db.execute("SELECT * FROM market_check WHERE date = ?", (today,)).fetchone()
     return jsonify({"success": True, "data": row_to_dict(row), "date": today})

@@ -155,7 +155,7 @@ export const MarketCheck = {
   },
   async mounted() {
     try {
-      const today = await get("/api/market-check/today");
+      const today = await get(`/api/market-check/today?date=${isoToday()}`);
       if (today) {
         this.form = {
           date: today.date,
