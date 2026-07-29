@@ -15,6 +15,11 @@ DEFAULT_SETTINGS = {
     "portfolio": {"value": 0, "currency": "AUD"},
     "max_position_pct": 5.0,
     "fx_rates": {},
+    # Alerts
+    "ntfy_server": "https://ntfy.sh",
+    "ntfy_topic": "",            # empty = alerts disabled until set (use a long random topic)
+    "alert_enabled": False,
+    "alert_check_time": "16:20",  # US/Eastern; shortly after the 4pm close
 }
 
 
@@ -129,6 +134,31 @@ def init_db():
                 cik TEXT,
                 source TEXT,
                 fetched_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS alert_watch (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL UNIQUE,
+                bucket TEXT NOT NULL DEFAULT 'BUY',   -- BUY | HELD
+                kind TEXT NOT NULL DEFAULT 'Trade',   -- Trade | Invest
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS alert_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                bucket TEXT,          -- BUY | HELD (list it was in when it fired)
+                action TEXT,          -- BUY | ADD | SELL (what the signal wants)
+                signal_dir TEXT,      -- BUY | SELL (raw engine direction; dedupe axis)
+                kind TEXT,
+                bar_date TEXT,        -- daily bar the signal fired on (dedupe key)
+                price REAL,
+                message TEXT,
+                sent_at TEXT,
+                transport TEXT,
+                ok INTEGER,           -- 1 = pushed OK, 0 = fetch/send failure
+                error TEXT
             );
         """)
         for k, v in DEFAULT_SETTINGS.items():

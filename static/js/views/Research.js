@@ -31,6 +31,8 @@ export const Research = {
       prefilling: false,
       prefillInfo: null,
       prefillError: null,
+      watching: false,
+      watched: false,
       listSort: { key: "updated_at", dir: "desc" },
       smSort: { key: "weight", dir: "desc" },
       picker: { open: false, ticker: "", match: null, checked: false },
@@ -96,6 +98,7 @@ export const Research = {
       this.smHolders = null;
       this.valuation = null;
       this.saveError = null;
+      this.watched = false;
       this.mode = "new";
       this.scrollTop();
       if (this.form.ticker) {
@@ -150,6 +153,7 @@ export const Research = {
       this.smHolders = null;
       this.valuation = null;
       this.saveError = null;
+      this.watched = false;
       this.mode = "edit";
       this.scrollTop();
       this.fetchSmartMoney();
@@ -241,6 +245,21 @@ export const Research = {
       this.prefillValuationInputs = null;
       this.prefillInfo = null;
       this.prefillError = null;
+    },
+    // One-click: add this ticker to the Buy alerts list, carrying the current
+    // decision as the alert kind (INVEST → Invest, else Trade).
+    async watchToBuy() {
+      const t = (this.form.ticker || "").trim().toUpperCase();
+      if (!t) return;
+      this.watching = true;
+      try {
+        await post("/api/alerts/from-research", { ticker: t, decision: this.form.decision });
+        this.watched = true;
+      } catch (e) {
+        this.saveError = "Watch failed: " + e.message;
+      } finally {
+        this.watching = false;
+      }
     },
     // Discard the prefilled (unsaved) valuation preview and restore any saved one.
     resetPrefilledValuation() {
@@ -412,6 +431,10 @@ export const Research = {
             <button class="btn-ghost" @click="clearFields"
                     title="Clear fundamentals, company size / smart money / liquidity, and valuation (keeps ticker & company)">
               Clear
+            </button>
+            <button class="btn-ghost" :disabled="!form.ticker || watching" @click="watchToBuy"
+                    title="Add this ticker to the Buy alerts list (watches for a buy signal)">
+              {{ watching ? 'Adding…' : (watched ? '★ Watching' : '☆ Watch to Buy') }}
             </button>
             <span class="divider"></span>
             <button class="btn-primary" :disabled="saving || !form.ticker" @click="saveAndReturn">

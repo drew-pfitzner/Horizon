@@ -1,0 +1,265 @@
+import { get, post, put, del, fmtDate } from "../utils.js";
+
+export const Alerts = {
+  data() {
+    return {
+      buy: [],
+      held: [],
+      seed: { buy: [], held: [] },
+      settings: { ntfy_server: "https://ntfy.sh", ntfy_topic: "", alert_enabled: false, alert_check_time: "16:20" },
+      log: [],
+      status: { status: "idle", last_summary: null, output: [], finished_at: null },
+      addForm: { ticker: "", bucket: "BUY", kind: "Trade" },
+      loading: false,
+      saving: false,
+      testing: false,
+      checking: false,
+      pollTimer: null,
+      msg: null,
+      err: null,
+    };
+  },
+  async mounted() {
+    await this.refresh();
+    await this.loadSettings();
+    await this.loadLog();
+    await this.loadStatus();
+  },
+  beforeUnmount() {
+    this.stopPolling();
+  },
+  methods: {
+    flash(m, isErr) {
+      if (isErr) { this.err = m; this.msg = null; } else { this.msg = m; this.err = null; }
+      setTimeout(() => { this.msg = null; this.err = null; }, 4000);
+    },
+    async refresh() {
+      try {
+        const d = await get("/api/alerts/watches");
+        this.buy = d.buy || [];
+        this.held = d.held || [];
+        const s = await get("/api/alerts/seed");
+        this.seed = s || { buy: [], held: [] };
+      } catch (e) { this.flash(e.message, true); }
+    },
+    async loadSettings() {
+      try { this.settings = await get("/api/alerts/settings"); } catch (e) { this.flash(e.message, true); }
+    },
+    async loadLog() {
+      try { this.log = await get("/api/alerts/log?limit=40") || []; } catch (e) { console.error(e); }
+    },
+    async loadStatus() {
+      try { this.status = await get("/api/alerts/status"); } catch (e) { console.error(e); }
+    },
+
+    async addWatch() {
+      const t = (this.addForm.ticker || "").trim().toUpperCase();
+      if (!t) return;
+      try {
+        await post("/api/alerts/watches", { ticker: t, bucket: this.addForm.bucket, kind: this.addForm.kind });
+        this.addForm.ticker = "";
+        await this.refresh();
+      } catch (e) { this.flash(e.message, true); }
+    },
+    async addSeed(ticker, bucket, kind) {
+      try {
+        await post("/api/alerts/watches", { ticker, bucket, kind: kind || "Trade" });
+        await this.refresh();
+      } catch (e) { this.flash(e.message, true); }
+    },
+    async moveTo(w, bucket) {
+      try { await put(`/api/alerts/watches/${w.id}`, { bucket }); await this.refresh(); }
+      catch (e) { this.flash(e.message, true); }
+    },
+    async setKind(w, kind) {
+      try { await put(`/api/alerts/watches/${w.id}`, { kind }); await this.refresh(); }
+      catch (e) { this.flash(e.message, true); }
+    },
+    async remove(w) {
+      try { await del(`/api/alerts/watches/${w.id}`); await this.refresh(); }
+      catch (e) { this.flash(e.message, true); }
+    },
+
+    async saveSettings() {
+      this.saving = true;
+      try { await put("/api/alerts/settings", this.settings); this.flash("Settings saved."); }
+      catch (e) { this.flash(e.message, true); }
+      finally { this.saving = false; }
+    },
+    async testPush() {
+      this.testing = true;
+      try { await post("/api/alerts/test", {}); this.flash("Test push sent — check your phone."); }
+      catch (e) { this.flash("Test failed: " + e.message, true); }
+      finally { this.testing = false; }
+    },
+    async checkNow() {
+      this.checking = true;
+      try {
+        await post("/api/alerts/check-now", {});
+        this.startPolling();
+      } catch (e) { this.flash(e.message, true); this.checking = false; }
+    },
+    startPolling() {
+      this.stopPolling();
+      this.pollTimer = setInterval(async () => {
+        await this.loadStatus();
+        if (this.status.status !== "running") {
+          this.stopPolling();
+          this.checking = false;
+          await this.loadLog();
+          const s = this.status.last_summary;
+          if (s) this.flash(`Checked ${s.checked} · sent ${s.fired}` + (s.failed ? ` · ${s.failed} failed` : ""));
+        }
+      }, 1500);
+    },
+    stopPolling() {
+      if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    },
+    kindBadge(kind) { return kind === "Invest" ? "blue" : "green"; },
+    actionBadge(a) { return a === "SELL" ? "red" : (a === "ADD" ? "orange" : "green"); },
+  },
+  setup() { return { fmtDate }; },
+  template: `
+  <div class="view alerts-view">
+    <div class="view-head">
+      <h1>Alerts</h1>
+      <div class="row-actions">
+        <button class="btn-ghost" :disabled="checking" @click="checkNow">
+          {{ checking ? 'Checking…' : 'Check now' }}
+        </button>
+      </div>
+    </div>
+
+    <p v-if="msg" class="text-muted">{{ msg }}</p>
+    <p v-if="err" class="text-red">{{ err }}</p>
+
+    <div class="alerts-grid">
+      <!-- BUY list -->
+      <div class="card">
+        <div class="card-head">
+          <h2>Buy <span class="text-muted">— watching for BUY signals</span></h2>
+        </div>
+        <table v-if="buy.length" class="table">
+          <thead><tr><th>Ticker</th><th>Kind</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="w in buy" :key="w.id">
+              <td><strong>{{ w.ticker }}</strong></td>
+              <td>
+                <span class="badge" :class="kindBadge(w.kind)" @click="setKind(w, w.kind === 'Invest' ? 'Trade' : 'Invest')"
+                      style="cursor:pointer" title="Click to toggle Trade/Invest">{{ w.kind }}</span>
+              </td>
+              <td class="num row-actions">
+                <button class="btn-ghost" @click="moveTo(w, 'HELD')" title="You bought it — start watching for add/sell too">Now holding →</button>
+                <button class="btn-danger" @click="remove(w)" title="Remove">✕</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="text-muted">No buy watches. Add one below or from Research.</p>
+
+        <div v-if="seed.buy.length" class="seed-box">
+          <span class="text-muted">Suggested from research:</span>
+          <button v-for="s in seed.buy" :key="s.ticker" class="pill" @click="addSeed(s.ticker, 'BUY', s.kind)">
+            + {{ s.ticker }} <span class="text-muted">({{ s.kind }})</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- HELD list -->
+      <div class="card">
+        <div class="card-head">
+          <h2>Held <span class="text-muted">— watching to ADD or SELL</span></h2>
+        </div>
+        <table v-if="held.length" class="table">
+          <thead><tr><th>Ticker</th><th>Kind</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="w in held" :key="w.id">
+              <td><strong>{{ w.ticker }}</strong></td>
+              <td>
+                <span class="badge" :class="kindBadge(w.kind)" @click="setKind(w, w.kind === 'Invest' ? 'Trade' : 'Invest')"
+                      style="cursor:pointer" title="Click to toggle Trade/Invest">{{ w.kind }}</span>
+              </td>
+              <td class="num row-actions">
+                <button class="btn-ghost" @click="moveTo(w, 'BUY')" title="Back to buy-only watching">← Back to Buy</button>
+                <button class="btn-danger" @click="remove(w)" title="Remove">✕</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="text-muted">No held watches. Move a Buy ticker here once you own it.</p>
+
+        <div v-if="seed.held.length" class="seed-box">
+          <span class="text-muted">Suggested from open trades:</span>
+          <button v-for="t in seed.held" :key="t" class="pill" @click="addSeed(t, 'HELD', 'Trade')">+ {{ t }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add row -->
+    <div class="card">
+      <div class="add-row">
+        <input class="input" v-model="addForm.ticker" placeholder="Ticker" @keyup.enter="addWatch"
+               style="max-width:8rem;text-transform:uppercase">
+        <select class="input" v-model="addForm.bucket" style="max-width:8rem">
+          <option value="BUY">Buy</option>
+          <option value="HELD">Held</option>
+        </select>
+        <select class="input" v-model="addForm.kind" style="max-width:8rem">
+          <option value="Trade">Trade</option>
+          <option value="Invest">Invest</option>
+        </select>
+        <button class="btn-primary" :disabled="!addForm.ticker" @click="addWatch">Add</button>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="card">
+      <div class="card-head"><h2>Notifications (ntfy)</h2></div>
+      <p class="text-muted">Install the ntfy app, subscribe to your topic, and the server pushes signals to it.
+        Public ntfy.sh topics are readable by anyone who knows the name — use a long random topic.</p>
+      <div class="field">
+        <label>ntfy server</label>
+        <input class="input" v-model="settings.ntfy_server" placeholder="https://ntfy.sh">
+      </div>
+      <div class="field">
+        <label>Topic</label>
+        <input class="input" v-model="settings.ntfy_topic" placeholder="horizon-<long-random>">
+      </div>
+      <div class="field">
+        <label>Check time (US/Eastern)</label>
+        <input class="input" v-model="settings.alert_check_time" placeholder="16:20" style="max-width:7rem">
+      </div>
+      <div class="field">
+        <label><input type="checkbox" v-model="settings.alert_enabled"> Alerts enabled</label>
+      </div>
+      <div class="row-actions">
+        <button class="btn-primary" :disabled="saving" @click="saveSettings">{{ saving ? 'Saving…' : 'Save' }}</button>
+        <button class="btn-ghost" :disabled="testing" @click="testPush">{{ testing ? 'Sending…' : 'Send test push' }}</button>
+      </div>
+    </div>
+
+    <!-- Recent alerts -->
+    <div class="card">
+      <div class="card-head"><h2>Recent alerts</h2></div>
+      <table v-if="log.length" class="table">
+        <thead><tr><th>When</th><th>Ticker</th><th>List</th><th>Action</th><th>Bar</th><th>Price</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr v-for="(r, i) in log" :key="i">
+            <td class="text-muted">{{ fmtDate(r.sent_at) }}</td>
+            <td><strong>{{ r.ticker }}</strong></td>
+            <td>{{ r.bucket || '—' }}</td>
+            <td><span v-if="r.action" class="badge" :class="actionBadge(r.action)">{{ r.action }}</span><span v-else>—</span></td>
+            <td>{{ r.bar_date || '—' }}</td>
+            <td>{{ r.price != null ? r.price.toFixed(2) : '—' }}</td>
+            <td>
+              <span v-if="r.ok" class="text-muted">sent</span>
+              <span v-else class="text-red" :title="r.error">failed</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="text-muted">No alerts yet.</p>
+    </div>
+  </div>
+  `,
+};

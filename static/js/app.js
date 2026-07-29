@@ -2,6 +2,7 @@ import { Home } from "./views/Home.js";
 import { MarketCheck } from "./views/MarketCheck.js";
 import { Research } from "./views/Research.js";
 import { Valuation } from "./views/Valuation.js";
+import { Alerts } from "./views/Alerts.js";
 import { Trades } from "./views/Trades.js";
 import { SmartMoney } from "./views/SmartMoney.js";
 import { Settings } from "./views/Settings.js";
@@ -19,6 +20,7 @@ const router = createRouter({
     { path: "/research/:id", component: Research, props: true },
     { path: "/valuation", component: Valuation },
     { path: "/valuation/:ticker", component: Valuation, props: true },
+    { path: "/alerts", component: Alerts },
     { path: "/trades", component: Trades },
     { path: "/smart-money", component: SmartMoney },
     { path: "/settings", component: Settings },
