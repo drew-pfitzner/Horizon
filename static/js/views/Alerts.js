@@ -1,27 +1,52 @@
 import { get, post, put, del, fmtDate } from "../utils.js";
 
+// Signal threshold fields, grouped to mirror the TradingView "Horizon Signal" inputs.
+const SIGNAL_GROUPS = [
+  { title: "RSI", fields: [
+    ["rsi_length", "RSI length"],
+    ["buy_rsi_trade", "Buy: RSI max (Trade)"],
+    ["buy_rsi_invest", "Buy: RSI max (Invest)"],
+    ["rsi_rising_bars", "Buy: RSI rising bars"],
+    ["sell_rsi_trade", "Sell: RSI min (Trade)"],
+    ["sell_rsi_invest", "Sell: RSI min (Invest)"],
+  ] },
+  { title: "Stochastic", fields: [
+    ["stoch_k_length", "Stoch %K length"],
+    ["stoch_smooth_k", "Stoch %K smoothing"],
+    ["stoch_d_length", "Stoch %D length"],
+    ["stoch_buy_max", "Buy: Stoch %D max"],
+    ["stoch_sell_min", "Sell: Stoch %D min"],
+  ] },
+  { title: "Volume", fields: [
+    ["vol_ma_length", "Volume MA length"],
+  ] },
+];
+
 export const Alerts = {
   data() {
     return {
       buy: [],
       held: [],
       seed: { buy: [], held: [] },
-      settings: { ntfy_server: "https://ntfy.sh", ntfy_topic: "", alert_enabled: false, alert_check_time: "16:20" },
+      signal: null,
+      signalDefaults: null,
       log: [],
       status: { status: "idle", last_summary: null, output: [], finished_at: null },
       addForm: { ticker: "", bucket: "BUY", kind: "Trade" },
-      loading: false,
-      saving: false,
-      testing: false,
+      savingSignal: false,
       checking: false,
+      showSignal: false,
       pollTimer: null,
       msg: null,
       err: null,
     };
   },
+  computed: {
+    signalGroups() { return SIGNAL_GROUPS; },
+  },
   async mounted() {
     await this.refresh();
-    await this.loadSettings();
+    await this.loadSignal();
     await this.loadLog();
     await this.loadStatus();
   },
@@ -42,8 +67,12 @@ export const Alerts = {
         this.seed = s || { buy: [], held: [] };
       } catch (e) { this.flash(e.message, true); }
     },
-    async loadSettings() {
-      try { this.settings = await get("/api/alerts/settings"); } catch (e) { this.flash(e.message, true); }
+    async loadSignal() {
+      try {
+        const s = await get("/api/alerts/settings");
+        this.signal = s.signal;
+        this.signalDefaults = s.signal_defaults;
+      } catch (e) { this.flash(e.message, true); }
     },
     async loadLog() {
       try { this.log = await get("/api/alerts/log?limit=40") || []; } catch (e) { console.error(e); }
@@ -80,18 +109,16 @@ export const Alerts = {
       catch (e) { this.flash(e.message, true); }
     },
 
-    async saveSettings() {
-      this.saving = true;
-      try { await put("/api/alerts/settings", this.settings); this.flash("Settings saved."); }
+    async saveSignal() {
+      this.savingSignal = true;
+      try { await put("/api/alerts/settings", { signal: this.signal }); await this.loadSignal(); this.flash("Signal settings saved."); }
       catch (e) { this.flash(e.message, true); }
-      finally { this.saving = false; }
+      finally { this.savingSignal = false; }
     },
-    async testPush() {
-      this.testing = true;
-      try { await post("/api/alerts/test", {}); this.flash("Test push sent — check your phone."); }
-      catch (e) { this.flash("Test failed: " + e.message, true); }
-      finally { this.testing = false; }
+    resetSignal() {
+      if (this.signalDefaults) this.signal = { ...this.signalDefaults };
     },
+
     async checkNow() {
       this.checking = true;
       try {
@@ -120,24 +147,23 @@ export const Alerts = {
   },
   setup() { return { fmtDate }; },
   template: `
-  <div class="view alerts-view">
+  <div class="alerts-view">
     <div class="view-head">
       <h1>Alerts</h1>
-      <div class="row-actions">
-        <button class="btn-ghost" :disabled="checking" @click="checkNow">
-          {{ checking ? 'Checking…' : 'Check now' }}
-        </button>
-      </div>
+      <button class="btn-ghost" :disabled="checking" @click="checkNow">
+        {{ checking ? 'Checking…' : '↻ Check now' }}
+      </button>
     </div>
 
-    <p v-if="msg" class="text-muted">{{ msg }}</p>
+    <p v-if="msg" class="text-green">{{ msg }}</p>
     <p v-if="err" class="text-red">{{ err }}</p>
 
     <div class="alerts-grid">
       <!-- BUY list -->
       <div class="card">
         <div class="card-head">
-          <h2>Buy <span class="text-muted">— watching for BUY signals</span></h2>
+          <h3>Buy</h3>
+          <span class="text-muted">watching for BUY signals</span>
         </div>
         <table v-if="buy.length" class="table">
           <thead><tr><th>Ticker</th><th>Kind</th><th></th></tr></thead>
@@ -145,22 +171,23 @@ export const Alerts = {
             <tr v-for="w in buy" :key="w.id">
               <td><strong>{{ w.ticker }}</strong></td>
               <td>
-                <span class="badge" :class="kindBadge(w.kind)" @click="setKind(w, w.kind === 'Invest' ? 'Trade' : 'Invest')"
-                      style="cursor:pointer" title="Click to toggle Trade/Invest">{{ w.kind }}</span>
+                <span class="badge kind-toggle" :class="kindBadge(w.kind)"
+                      @click="setKind(w, w.kind === 'Invest' ? 'Trade' : 'Invest')"
+                      title="Click to toggle Trade/Invest">{{ w.kind }}</span>
               </td>
               <td class="num row-actions">
-                <button class="btn-ghost" @click="moveTo(w, 'HELD')" title="You bought it — start watching for add/sell too">Now holding →</button>
-                <button class="btn-danger" @click="remove(w)" title="Remove">✕</button>
+                <button class="btn-ghost sm" @click="moveTo(w, 'HELD')" title="You bought it — watch to add/sell too">Now holding →</button>
+                <button class="icon-btn danger" @click="remove(w)" title="Remove">✕</button>
               </td>
             </tr>
           </tbody>
         </table>
-        <p v-else class="text-muted">No buy watches. Add one below or from Research.</p>
+        <p v-else class="empty">No buy watches. Add one below, or use “☆ Watch to Buy” in Research.</p>
 
         <div v-if="seed.buy.length" class="seed-box">
-          <span class="text-muted">Suggested from research:</span>
+          <span class="text-muted">From research:</span>
           <button v-for="s in seed.buy" :key="s.ticker" class="pill" @click="addSeed(s.ticker, 'BUY', s.kind)">
-            + {{ s.ticker }} <span class="text-muted">({{ s.kind }})</span>
+            + {{ s.ticker }} <span class="text-muted">{{ s.kind }}</span>
           </button>
         </div>
       </div>
@@ -168,7 +195,8 @@ export const Alerts = {
       <!-- HELD list -->
       <div class="card">
         <div class="card-head">
-          <h2>Held <span class="text-muted">— watching to ADD or SELL</span></h2>
+          <h3>Held</h3>
+          <span class="text-muted">watching to ADD or SELL</span>
         </div>
         <table v-if="held.length" class="table">
           <thead><tr><th>Ticker</th><th>Kind</th><th></th></tr></thead>
@@ -176,73 +204,77 @@ export const Alerts = {
             <tr v-for="w in held" :key="w.id">
               <td><strong>{{ w.ticker }}</strong></td>
               <td>
-                <span class="badge" :class="kindBadge(w.kind)" @click="setKind(w, w.kind === 'Invest' ? 'Trade' : 'Invest')"
-                      style="cursor:pointer" title="Click to toggle Trade/Invest">{{ w.kind }}</span>
+                <span class="badge kind-toggle" :class="kindBadge(w.kind)"
+                      @click="setKind(w, w.kind === 'Invest' ? 'Trade' : 'Invest')"
+                      title="Click to toggle Trade/Invest">{{ w.kind }}</span>
               </td>
               <td class="num row-actions">
-                <button class="btn-ghost" @click="moveTo(w, 'BUY')" title="Back to buy-only watching">← Back to Buy</button>
-                <button class="btn-danger" @click="remove(w)" title="Remove">✕</button>
+                <button class="btn-ghost sm" @click="moveTo(w, 'BUY')" title="Back to buy-only watching">← Back to Buy</button>
+                <button class="icon-btn danger" @click="remove(w)" title="Remove">✕</button>
               </td>
             </tr>
           </tbody>
         </table>
-        <p v-else class="text-muted">No held watches. Move a Buy ticker here once you own it.</p>
+        <p v-else class="empty">No held watches. Move a Buy ticker here once you own it.</p>
 
         <div v-if="seed.held.length" class="seed-box">
-          <span class="text-muted">Suggested from open trades:</span>
+          <span class="text-muted">From open trades:</span>
           <button v-for="t in seed.held" :key="t" class="pill" @click="addSeed(t, 'HELD', 'Trade')">+ {{ t }}</button>
         </div>
       </div>
     </div>
 
     <!-- Add row -->
-    <div class="card">
+    <div class="card add-card">
       <div class="add-row">
-        <input class="input" v-model="addForm.ticker" placeholder="Ticker" @keyup.enter="addWatch"
-               style="max-width:8rem;text-transform:uppercase">
-        <select class="input" v-model="addForm.bucket" style="max-width:8rem">
-          <option value="BUY">Buy</option>
-          <option value="HELD">Held</option>
-        </select>
-        <select class="input" v-model="addForm.kind" style="max-width:8rem">
-          <option value="Trade">Trade</option>
-          <option value="Invest">Invest</option>
-        </select>
-        <button class="btn-primary" :disabled="!addForm.ticker" @click="addWatch">Add</button>
+        <input class="input ticker-input" v-model="addForm.ticker" placeholder="TICKER" @keyup.enter="addWatch">
+        <div class="seg">
+          <button :class="{ on: addForm.bucket === 'BUY' }" @click="addForm.bucket = 'BUY'">Buy</button>
+          <button :class="{ on: addForm.bucket === 'HELD' }" @click="addForm.bucket = 'HELD'">Held</button>
+        </div>
+        <div class="seg">
+          <button :class="{ on: addForm.kind === 'Trade' }" @click="addForm.kind = 'Trade'">Trade</button>
+          <button :class="{ on: addForm.kind === 'Invest' }" @click="addForm.kind = 'Invest'">Invest</button>
+        </div>
+        <button class="btn-primary" :disabled="!addForm.ticker.trim()" @click="addWatch">Add ticker</button>
       </div>
     </div>
 
-    <!-- Settings -->
-    <div class="card">
-      <div class="card-head"><h2>Notifications (ntfy)</h2></div>
-      <p class="text-muted">Install the ntfy app, subscribe to your topic, and the server pushes signals to it.
-        Public ntfy.sh topics are readable by anyone who knows the name — use a long random topic.</p>
-      <div class="field">
-        <label>ntfy server</label>
-        <input class="input" v-model="settings.ntfy_server" placeholder="https://ntfy.sh">
+    <!-- Signal settings (mirror TradingView) -->
+    <div class="card" v-if="signal">
+      <div class="card-head collapsible" @click="showSignal = !showSignal">
+        <h3>Signal settings <span class="chev">{{ showSignal ? '▾' : '▸' }}</span></h3>
+        <span class="text-muted">match your TradingView “Horizon Signal” inputs</span>
       </div>
-      <div class="field">
-        <label>Topic</label>
-        <input class="input" v-model="settings.ntfy_topic" placeholder="horizon-<long-random>">
-      </div>
-      <div class="field">
-        <label>Check time (US/Eastern)</label>
-        <input class="input" v-model="settings.alert_check_time" placeholder="16:20" style="max-width:7rem">
-      </div>
-      <div class="field">
-        <label><input type="checkbox" v-model="settings.alert_enabled"> Alerts enabled</label>
-      </div>
-      <div class="row-actions">
-        <button class="btn-primary" :disabled="saving" @click="saveSettings">{{ saving ? 'Saving…' : 'Save' }}</button>
-        <button class="btn-ghost" :disabled="testing" @click="testPush">{{ testing ? 'Sending…' : 'Send test push' }}</button>
-      </div>
+      <template v-if="showSignal">
+        <div class="signal-groups">
+          <div v-for="g in signalGroups" :key="g.title" class="signal-group">
+            <h4>{{ g.title }}</h4>
+            <div class="sig-field" v-for="f in g.fields" :key="f[0]">
+              <label>{{ f[1] }}</label>
+              <input type="number" v-model.number="signal[f[0]]">
+            </div>
+            <label v-if="g.title === 'Volume'" class="check-inline">
+              <input type="checkbox" v-model="signal.use_vol_filter"> Buy: require volume &gt; MA
+            </label>
+          </div>
+        </div>
+        <div class="toolbar">
+          <button class="btn-primary" :disabled="savingSignal" @click="saveSignal">
+            {{ savingSignal ? 'Saving…' : 'Save signal settings' }}
+          </button>
+          <button class="btn-ghost" @click="resetSignal">Reset to TradingView defaults</button>
+        </div>
+        <p class="text-muted sig-note">RSI rising bars: 0 = off, 1 = today &gt; yesterday, 2+ = N consecutive up-bars.
+          These apply to every watched ticker on the next check.</p>
+      </template>
     </div>
 
     <!-- Recent alerts -->
     <div class="card">
-      <div class="card-head"><h2>Recent alerts</h2></div>
+      <div class="card-head"><h3>Recent alerts</h3></div>
       <table v-if="log.length" class="table">
-        <thead><tr><th>When</th><th>Ticker</th><th>List</th><th>Action</th><th>Bar</th><th>Price</th><th>Status</th></tr></thead>
+        <thead><tr><th>When</th><th>Ticker</th><th>List</th><th>Action</th><th>Bar</th><th class="num">Price</th><th>Status</th></tr></thead>
         <tbody>
           <tr v-for="(r, i) in log" :key="i">
             <td class="text-muted">{{ fmtDate(r.sent_at) }}</td>
@@ -250,7 +282,7 @@ export const Alerts = {
             <td>{{ r.bucket || '—' }}</td>
             <td><span v-if="r.action" class="badge" :class="actionBadge(r.action)">{{ r.action }}</span><span v-else>—</span></td>
             <td>{{ r.bar_date || '—' }}</td>
-            <td>{{ r.price != null ? r.price.toFixed(2) : '—' }}</td>
+            <td class="num">{{ r.price != null ? r.price.toFixed(2) : '—' }}</td>
             <td>
               <span v-if="r.ok" class="text-muted">sent</span>
               <span v-else class="text-red" :title="r.error">failed</span>
@@ -258,7 +290,7 @@ export const Alerts = {
           </tr>
         </tbody>
       </table>
-      <p v-else class="text-muted">No alerts yet.</p>
+      <p v-else class="empty">No alerts yet.</p>
     </div>
   </div>
   `,

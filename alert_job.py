@@ -106,6 +106,7 @@ def run_checks():
     _set(status="running", started_at=datetime.utcnow().isoformat() + "Z",
          finished_at=None, error=None)
     now_et = datetime.now(ET)
+    signal_params = get_setting("alert_signal", None)
     fired, failed, checked = 0, 0, 0
     try:
         with get_db() as db:
@@ -127,7 +128,7 @@ def run_checks():
                     continue
 
                 bars = _completed_bars(bars, now_et)
-                series = evaluate(bars, kind=kind)
+                series = evaluate(bars, kind=kind, params=signal_params)
                 directions = ["BUY"] if bucket == "BUY" else ["BUY", "SELL"]
 
                 for direction in directions:

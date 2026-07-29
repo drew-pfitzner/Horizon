@@ -41,6 +41,11 @@ export const Settings = {
       refreshingFx: false,
       fxMessage: null,
       fxMessageClass: "",
+      ntfy: { ntfy_server: "https://ntfy.sh", ntfy_topic: "", alert_enabled: false, alert_check_time: "16:20" },
+      savingNtfy: false,
+      testingNtfy: false,
+      ntfyMessage: null,
+      ntfyMessageClass: "",
     };
   },
   async mounted() {
@@ -48,6 +53,7 @@ export const Settings = {
     await this.loadSystem();
     await this.loadAccess();
     await this.loadMaxAndFx();
+    await this.loadNtfy();
   },
   methods: {
     async loadAccess() {
@@ -352,6 +358,45 @@ export const Settings = {
         setTimeout(() => { this.fxMessage = null; }, 3000);
       }
     },
+    async loadNtfy() {
+      try {
+        const s = await get("/api/alerts/settings");
+        this.ntfy = {
+          ntfy_server: s.ntfy_server, ntfy_topic: s.ntfy_topic,
+          alert_enabled: s.alert_enabled, alert_check_time: s.alert_check_time,
+        };
+      } catch (e) { console.error(e); }
+    },
+    async saveNtfy() {
+      this.savingNtfy = true;
+      this.ntfyMessage = null;
+      try {
+        await put("/api/alerts/settings", this.ntfy);
+        this.ntfyMessage = "Saved";
+        this.ntfyMessageClass = "text-green";
+      } catch (e) {
+        this.ntfyMessage = `Error: ${e.message}`;
+        this.ntfyMessageClass = "text-red";
+      } finally {
+        this.savingNtfy = false;
+        setTimeout(() => { this.ntfyMessage = null; }, 3000);
+      }
+    },
+    async testNtfy() {
+      this.testingNtfy = true;
+      this.ntfyMessage = null;
+      try {
+        await post("/api/alerts/test", {});
+        this.ntfyMessage = "Test push sent — check your phone";
+        this.ntfyMessageClass = "text-green";
+      } catch (e) {
+        this.ntfyMessage = `Test failed: ${e.message}`;
+        this.ntfyMessageClass = "text-red";
+      } finally {
+        this.testingNtfy = false;
+        setTimeout(() => { this.ntfyMessage = null; }, 4000);
+      }
+    },
     async resetDefaults() {
       if (!confirm("Reset all pullback thresholds to defaults?")) return;
       try {
@@ -520,6 +565,41 @@ export const Settings = {
             {{ savingSec ? "Saving..." : "Save SEC Email" }}
           </button>
           <span :class="secMessageClass">{{ secMessage }}</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Alert Notifications (ntfy)</h3>
+        <p class="text-muted">
+          Push buy/sell alerts to your phone. Install the <strong>ntfy</strong> app, subscribe to your topic,
+          and Horizon posts signals to it. Public ntfy.sh topics are readable by anyone who knows the name —
+          use a long random topic, or self-host ntfy.
+        </p>
+        <div class="settings-fields">
+          <div class="field">
+            <label>ntfy server</label>
+            <input type="text" v-model="ntfy.ntfy_server" placeholder="https://ntfy.sh">
+          </div>
+          <div class="field">
+            <label>Topic</label>
+            <input type="text" v-model="ntfy.ntfy_topic" placeholder="horizon-<long-random>">
+          </div>
+          <div class="field">
+            <label>Daily check time (US/Eastern)</label>
+            <input type="text" v-model="ntfy.alert_check_time" placeholder="16:20" style="max-width: 8rem;">
+          </div>
+        </div>
+        <label class="check-inline">
+          <input type="checkbox" v-model="ntfy.alert_enabled"> Alerts enabled
+        </label>
+        <div class="toolbar">
+          <button class="btn-primary" :disabled="savingNtfy" @click="saveNtfy">
+            {{ savingNtfy ? "Saving…" : "Save" }}
+          </button>
+          <button class="btn-ghost" :disabled="testingNtfy" @click="testNtfy">
+            {{ testingNtfy ? "Sending…" : "Send test push" }}
+          </button>
+          <span :class="ntfyMessageClass">{{ ntfyMessage }}</span>
         </div>
       </div>
 

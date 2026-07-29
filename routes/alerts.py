@@ -11,12 +11,37 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify
 
 from db import get_db, get_setting, set_setting
+from signals import DEFAULTS as SIGNAL_DEFAULTS, PARAM_BOUNDS
 import alert_job
 import notify
 
 bp = Blueprint("alerts", __name__)
 
 _ALERT_SETTINGS = ("ntfy_server", "ntfy_topic", "alert_enabled", "alert_check_time")
+
+
+def _clean_signal(raw):
+    """Coerce + clamp incoming signal params to valid values, filling from
+    DEFAULTS. Unknown keys are dropped; out-of-range values are clamped."""
+    out = dict(SIGNAL_DEFAULTS)
+    if not isinstance(raw, dict):
+        return out
+    for key, default in SIGNAL_DEFAULTS.items():
+        if key not in raw or raw[key] is None:
+            continue
+        val = raw[key]
+        if isinstance(default, bool):
+            out[key] = bool(val)
+        else:
+            try:
+                val = int(val)
+            except (TypeError, ValueError):
+                continue
+            lo, hi = PARAM_BOUNDS.get(key, (None, None))
+            if lo is not None:
+                val = max(lo, min(hi, val))
+            out[key] = val
+    return out
 
 
 def _kind_from_decision(decision):
@@ -145,6 +170,8 @@ def get_settings():
         "ntfy_topic": get_setting("ntfy_topic", ""),
         "alert_enabled": get_setting("alert_enabled", False),
         "alert_check_time": get_setting("alert_check_time", "16:20"),
+        "signal": _clean_signal(get_setting("alert_signal", None)),
+        "signal_defaults": dict(SIGNAL_DEFAULTS),
     }})
 
 
@@ -159,6 +186,8 @@ def put_settings():
             elif key == "ntfy_topic":
                 val = (val or "").strip()
             set_setting(key, val)
+    if "signal" in body:
+        set_setting("alert_signal", _clean_signal(body["signal"]))
     return jsonify({"success": True})
 
 

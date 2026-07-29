@@ -2,6 +2,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from config import HORIZON_DB, SMART_MONEY_DB
+from signals import DEFAULTS as SIGNAL_DEFAULTS
 
 
 DEFAULT_SETTINGS = {
@@ -20,6 +21,9 @@ DEFAULT_SETTINGS = {
     "ntfy_topic": "",            # empty = alerts disabled until set (use a long random topic)
     "alert_enabled": False,
     "alert_check_time": "16:20",  # US/Eastern; shortly after the 4pm close
+    # Signal thresholds — mirror the TradingView "Horizon Signal" inputs so alerts
+    # match the chart.
+    "alert_signal": dict(SIGNAL_DEFAULTS),
 }
 
 
