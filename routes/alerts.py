@@ -198,11 +198,27 @@ def get_log():
     limit = int(request.args.get("limit", 50))
     with get_db() as db:
         rows = db.execute(
-            "SELECT ticker, bucket, action, signal_dir, kind, bar_date, price, "
+            "SELECT id, ticker, bucket, action, signal_dir, kind, bar_date, price, "
             "message, sent_at, ok, error FROM alert_log "
             "ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
     return jsonify({"success": True, "data": [dict(r) for r in rows]})
+
+
+@bp.route("/log/<int:log_id>", methods=["DELETE"])
+def delete_log_entry(log_id):
+    with get_db() as db:
+        db.execute("DELETE FROM alert_log WHERE id = ?", (log_id,))
+    return jsonify({"success": True})
+
+
+@bp.route("/log", methods=["DELETE"])
+def clear_log():
+    """Clear the alert history. Safe: dedupe uses each watch's last_checked_bar
+    watermark, not this log, so clearing never causes signals to re-fire."""
+    with get_db() as db:
+        db.execute("DELETE FROM alert_log")
+    return jsonify({"success": True})
 
 
 @bp.route("/check-now", methods=["POST"])

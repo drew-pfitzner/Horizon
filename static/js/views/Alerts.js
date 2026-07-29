@@ -77,6 +77,15 @@ export const Alerts = {
     async loadLog() {
       try { this.log = await get("/api/alerts/log?limit=40") || []; } catch (e) { console.error(e); }
     },
+    async deleteLogEntry(r) {
+      try { await del(`/api/alerts/log/${r.id}`); this.log = this.log.filter(x => x.id !== r.id); }
+      catch (e) { this.flash(e.message, true); }
+    },
+    async clearLog() {
+      if (!confirm("Clear all recent alerts? This only clears the history — it won't cause any signals to re-fire.")) return;
+      try { await del("/api/alerts/log"); this.log = []; this.flash("Alert history cleared."); }
+      catch (e) { this.flash(e.message, true); }
+    },
     async loadStatus() {
       try { this.status = await get("/api/alerts/status"); } catch (e) { console.error(e); }
     },
@@ -272,11 +281,15 @@ export const Alerts = {
 
     <!-- Recent alerts -->
     <div class="card">
-      <div class="card-head"><h3>Recent alerts</h3></div>
+      <div class="card-head">
+        <h3>Recent alerts</h3>
+        <div class="spacer"></div>
+        <button v-if="log.length" class="btn-ghost sm" @click="clearLog">Clear all</button>
+      </div>
       <table v-if="log.length" class="table">
-        <thead><tr><th>When</th><th>Ticker</th><th>List</th><th>Action</th><th>Bar</th><th class="num">Price</th><th>Status</th></tr></thead>
+        <thead><tr><th>When</th><th>Ticker</th><th>List</th><th>Action</th><th>Bar</th><th class="num">Price</th><th>Status</th><th></th></tr></thead>
         <tbody>
-          <tr v-for="(r, i) in log" :key="i">
+          <tr v-for="r in log" :key="r.id">
             <td class="text-muted">{{ fmtDate(r.sent_at) }}</td>
             <td><strong>{{ r.ticker }}</strong></td>
             <td>{{ r.bucket || '—' }}</td>
@@ -287,6 +300,7 @@ export const Alerts = {
               <span v-if="r.ok" class="text-muted">sent</span>
               <span v-else class="text-red" :title="r.error">failed</span>
             </td>
+            <td class="num"><button class="icon-btn danger" @click="deleteLogEntry(r)" title="Remove from history">✕</button></td>
           </tr>
         </tbody>
       </table>

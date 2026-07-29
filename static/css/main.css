@@ -616,6 +616,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .card-head { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.6rem; }
 .card-head h3 { margin: 0; font-size: 1.05rem; }
+.card-head .spacer { flex: 1; }
 .card-head.collapsible { cursor: pointer; user-select: none; }
 .card-head .chev { font-size: 0.8rem; color: var(--text-muted, #8b949e); }
 
