@@ -78,13 +78,12 @@ def _completed_bars(bars, now_et):
     return bars
 
 
-def _last_fired_bar(db, ticker, direction):
-    row = db.execute(
-        "SELECT MAX(bar_date) AS d FROM alert_log "
-        "WHERE ticker = ? AND signal_dir = ? AND ok = 1",
-        (ticker, direction),
-    ).fetchone()
-    return row["d"] if row else None
+def _set_checked(db, ticker, bar_date):
+    """Advance the per-ticker watermark to the latest evaluated bar."""
+    db.execute(
+        "UPDATE alert_watch SET last_checked_bar = ? WHERE ticker = ?",
+        (bar_date, ticker),
+    )
 
 
 def _log(db, *, ticker, bucket, action, direction, kind, bar_date, price,
@@ -111,12 +110,13 @@ def run_checks():
     try:
         with get_db() as db:
             watches = db.execute(
-                "SELECT ticker, bucket, kind FROM alert_watch WHERE active = 1 "
-                "ORDER BY ticker"
+                "SELECT ticker, bucket, kind, last_checked_bar FROM alert_watch "
+                "WHERE active = 1 ORDER BY ticker"
             ).fetchall()
 
             for w in watches:
                 ticker, bucket, kind = w["ticker"], w["bucket"], w["kind"]
+                last_checked = w["last_checked_bar"]
                 checked += 1
                 bars, source = fetch_history(ticker)
                 if not bars:
@@ -128,17 +128,33 @@ def run_checks():
                     continue
 
                 bars = _completed_bars(bars, now_et)
+                if not bars:
+                    continue
+                latest_bar = bars[-1]["date"]
+
+                # First time this ticker is evaluated: arm it at the current bar
+                # and fire NOTHING. Only bars that close *after* this point ever
+                # alert — matching TradingView (no back-fill of stale history).
+                if not last_checked:
+                    _set_checked(db, ticker, latest_bar)
+                    _append(f"{ticker}: armed at {latest_bar} (no back-fill)")
+                    continue
+
+                if latest_bar <= last_checked:
+                    continue  # no new completed bar since last check
+
                 series = evaluate(bars, kind=kind, params=signal_params)
                 directions = ["BUY"] if bucket == "BUY" else ["BUY", "SELL"]
+                # Only bars newer than the watermark are eligible (catch-up window).
+                eligible = [s for s in series if s["date"] > last_checked]
 
+                send_failed = False
                 for direction in directions:
                     key = "buy" if direction == "BUY" else "sell"
-                    last = _last_fired_bar(db, ticker, direction)
-                    due = [s for s in series if s[key]
-                           and (last is None or s["date"] > last)]
-                    if not due:
+                    hits = [s for s in eligible if s[key]]
+                    if not hits:
                         continue
-                    sig = due[-1]  # only the latest edge; earlier ones are stale
+                    sig = hits[-1]  # only the latest edge in the window
                     ok, err, title, body = push_signal(
                         bucket, kind, direction, ticker, sig["close"],
                         rsi=sig["rsi"], d=sig["d"])
@@ -152,7 +168,14 @@ def run_checks():
                         _append(f"{ticker}: {action} @ {sig['date']} — sent")
                     else:
                         failed += 1
+                        send_failed = True
                         _append(f"{ticker}: {action} @ {sig['date']} — send failed: {err}")
+
+                # Advance the watermark only if delivery succeeded; a failed push
+                # (ntfy down / topic not set) is retried on the next run, and since
+                # we only ever fire the latest hit in the window it won't pile up.
+                if not send_failed:
+                    _set_checked(db, ticker, latest_bar)
 
         summary = {"checked": checked, "fired": fired, "failed": failed,
                    "at": now_et.isoformat()}

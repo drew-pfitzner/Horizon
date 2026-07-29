@@ -146,7 +146,8 @@ def init_db():
                 bucket TEXT NOT NULL DEFAULT 'BUY',   -- BUY | HELD
                 kind TEXT NOT NULL DEFAULT 'Trade',   -- Trade | Invest
                 active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT
+                created_at TEXT,
+                last_checked_bar TEXT                 -- watermark: latest bar evaluated (NULL = not yet armed)
             );
 
             CREATE TABLE IF NOT EXISTS alert_log (
@@ -170,6 +171,14 @@ def init_db():
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
                 (k, json.dumps(v)),
             )
+        _add_column_if_missing(db, "alert_watch", "last_checked_bar", "TEXT")
+
+
+def _add_column_if_missing(db, table, column, coltype):
+    """Idempotent ALTER for schema additions on already-created tables."""
+    cols = {r["name"] for r in db.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
 @contextmanager

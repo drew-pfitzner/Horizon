@@ -227,7 +227,7 @@ export const Alerts = {
     <!-- Add row -->
     <div class="card add-card">
       <div class="add-row">
-        <input class="input ticker-input" v-model="addForm.ticker" placeholder="TICKER" @keyup.enter="addWatch">
+        <input type="text" class="ticker-input" v-model="addForm.ticker" placeholder="TICKER" @keyup.enter="addWatch">
         <div class="seg">
           <button :class="{ on: addForm.bucket === 'BUY' }" @click="addForm.bucket = 'BUY'">Buy</button>
           <button :class="{ on: addForm.bucket === 'HELD' }" @click="addForm.bucket = 'HELD'">Held</button>
