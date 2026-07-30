@@ -28,10 +28,28 @@
         <router-link to="/smart-money" active-class="active" @click="mobileMenuOpen = false">Smart Money</router-link>
         <router-link to="/settings" active-class="active" @click="mobileMenuOpen = false">Settings</router-link>
       </nav>
-      <div class="gate" :class="gateClass" v-if="gate" :title="gateTitle">
+      <div class="gate" :class="[gateClass, { open: gatePopOpen }]" v-if="gate"
+           @click="gatePopOpen = !gatePopOpen" @mouseleave="gatePopOpen = false">
         <span class="dot"></span>
         <span class="label">{{ gateLabel }}</span>
         <span class="size" v-if="gate.position_size_pct != null">{{ gate.position_size_pct }}%</span>
+        <div class="gate-pop" @click.stop>
+          <div class="gate-pop-head" :class="gateClass">{{ gateHeadline }}</div>
+          <div class="gate-pop-sub">{{ gateSub }}</div>
+          <div v-if="gateSizeBase != null" class="gate-pop-amounts">
+            <span class="amt">{{ fmtCcy(gateSizeBase, gateBaseCcy) }} <small>{{ gateBaseCcy }}</small></span>
+            <span v-if="gateShowQuote && gateSizeQuote != null" class="amt">≈ {{ fmtCcy(gateSizeQuote, 'USD') }} <small>USD</small></span>
+          </div>
+          <div v-if="gateShowQuote && gateRate != null && gateSizeBase != null" class="gate-pop-meta">
+            USD/{{ gateBaseCcy }} @ {{ gateRate.toFixed(4) }}
+          </div>
+          <div v-if="gateMaxBase != null" class="gate-pop-meta">
+            Max {{ maxPositionPct }}% = {{ fmtCcy(gateMaxBase, gateBaseCcy) }}<span v-if="gateShowQuote && gateMaxQuote != null"> ≈ {{ fmtCcy(gateMaxQuote, 'USD') }} USD</span>
+          </div>
+          <div v-if="gateSizeBase == null && gate.crash_risk === 'OK'" class="gate-pop-meta">
+            Set a portfolio value in Settings to see dollar sizing.
+          </div>
+        </div>
       </div>
     </header>
     <main class="content">

@@ -29,7 +29,8 @@ const router = createRouter({
 
 const app = createApp({
   data() {
-    return { gate: null, mobileMenuOpen: false, portfolio: { value: 0, currency: "AUD" }, fxRates: {} };
+    return { gate: null, mobileMenuOpen: false, gatePopOpen: false,
+             portfolio: { value: 0, currency: "AUD" }, maxPositionPct: 5, fxRates: {} };
   },
   computed: {
     gateClass() {
@@ -44,17 +45,47 @@ const app = createApp({
       if (this.gate.crash_risk === "NO_TRADE") return "NO TRADE";
       return "—";
     },
-    // Hover tooltip: per-stock position size in dollar terms (base + USD).
-    gateTitle() {
-      if (!this.gate || this.gate.crash_risk !== "OK") return "";
-      const pct = Number(this.gate.position_size_pct);
-      if (!pct || !this.portfolio.value) return "";
-      const baseCcy = (this.portfolio.currency || "AUD").toUpperCase();
-      const base = this.portfolio.value * pct / 100;
-      let s = `Position size ${pct}% = ${fmtCcy(base, baseCcy)} ${baseCcy}`;
-      const rate = fxRate(this.fxRates, baseCcy, "USD");
-      if (baseCcy !== "USD" && rate != null) s += ` ≈ ${fmtCcy(base * rate, "USD")} USD`;
-      return s;
+    // Hover popover: headline + per-stock position size in dollar terms.
+    gateHeadline() {
+      if (!this.gate) return "NO CHECK";
+      if (this.gate.crash_risk === "OK") return "CAN TRADE";
+      if (this.gate.crash_risk === "CAUTION") return "CAUTION";
+      if (this.gate.crash_risk === "NO_TRADE") return "NO TRADE";
+      return "—";
+    },
+    gateSub() {
+      if (!this.gate) return "Run today's market check.";
+      const lvl = this.gate.position_size_level;
+      if (this.gate.crash_risk === "OK") {
+        return lvl ? `${lvl} — ${this.gate.position_size_pct}% per stock (max ${this.maxPositionPct}%)` : "Cleared to trade.";
+      }
+      if (this.gate.crash_risk === "CAUTION") return "Crash signals mixed — proceed with care.";
+      if (this.gate.crash_risk === "NO_TRADE") return "Crash conditions — sit on your hands.";
+      return "";
+    },
+    gateBaseCcy() { return (this.portfolio.currency || "AUD").toUpperCase(); },
+    gateShowQuote() { return this.gateBaseCcy !== "USD"; },
+    gateRate() { return fxRate(this.fxRates, this.gateBaseCcy, "USD"); },
+    gatePct() {
+      if (!this.gate || this.gate.crash_risk !== "OK") return null;
+      const p = Number(this.gate.position_size_pct);
+      return p || null;
+    },
+    gateSizeBase() {
+      if (this.gatePct == null || !this.portfolio.value) return null;
+      return this.portfolio.value * this.gatePct / 100;
+    },
+    gateSizeQuote() {
+      if (this.gateSizeBase == null || this.gateRate == null) return null;
+      return this.gateSizeBase * this.gateRate;
+    },
+    gateMaxBase() {
+      if (this.gatePct == null || !this.portfolio.value || !this.maxPositionPct) return null;
+      return this.portfolio.value * this.maxPositionPct / 100;
+    },
+    gateMaxQuote() {
+      if (this.gateMaxBase == null || this.gateRate == null) return null;
+      return this.gateMaxBase * this.gateRate;
     },
   },
   methods: {
@@ -69,15 +100,18 @@ const app = createApp({
     },
     async loadPortfolioFx() {
       try {
-        const [portfolio, fx] = await Promise.all([
+        const [portfolio, maxPct, fx] = await Promise.all([
           get("/api/settings/portfolio"),
+          get("/api/settings/max-position-pct"),
           get("/api/settings/fx-rates"),
         ]);
         this.portfolio = { value: Number(portfolio.value) || 0, currency: portfolio.currency || "AUD" };
+        this.maxPositionPct = Number(maxPct) || 5;
         this.fxRates = fx || {};
       } catch (e) { console.error("loadPortfolioFx", e); }
     },
   },
+  setup() { return { fmtCcy }; },
   async mounted() {
     await Promise.all([this.loadGate(), this.loadPortfolioFx()]);
   },
