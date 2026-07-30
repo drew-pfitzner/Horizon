@@ -182,17 +182,40 @@ def performance():
         rows = db.execute("SELECT * FROM trades").fetchall()
     trades = [dict(r) for r in rows]
 
+    portfolio = get_setting("portfolio", {"value": 0, "currency": "AUD"}) or {}
+    try:
+        portfolio_value = float(portfolio.get("value") or 0)
+    except (TypeError, ValueError):
+        portfolio_value = 0.0
+    portfolio_currency = (portfolio.get("currency") or "AUD").upper()
+    from routes.settings import get_fx_rate
+
     by_month = defaultdict(lambda: {
         "open_count": 0, "closed_count": 0, "wins": 0, "losses": 0,
         "total_pl": 0.0, "total_roi": 0.0, "trades": [],
     })
 
     overall = {"open": 0, "closed": 0, "wins": 0, "losses": 0,
-               "total_pl": 0.0, "avg_roi": 0.0, "win_rate": 0.0}
+               "total_pl": 0.0, "avg_roi": 0.0, "win_rate": 0.0,
+               "total_pl_base": 0.0, "portfolio_value": round(portfolio_value, 2),
+               "portfolio_currency": portfolio_currency,
+               "return_on_capital": None,   # year-scoped: selected-year realized P/L ÷ portfolio
+               "cagr": None}                # all-time compound annual growth of implied equity
 
     closed_rois = []
+    year_pl_base = 0.0        # realized P/L (base ccy) for trades entered in `year`
+    first_entry = None        # earliest entry date across all trades (CAGR span start)
     for t in trades:
+        # base-currency realized P/L for this trade (computed once)
+        pl_base = None
+        if t.get("exit_date") and t.get("pl_dollar") is not None:
+            fx = get_fx_rate((t.get("currency") or "USD").upper(), portfolio_currency)
+            if fx is not None:
+                pl_base = t["pl_dollar"] * fx
+
         if t.get("entry_date"):
+            if first_entry is None or t["entry_date"] < first_entry:
+                first_entry = t["entry_date"]
             ent_year = t["entry_date"][:4]
             ent_month = t["entry_date"][5:7]
             if ent_year == year:
@@ -207,6 +230,8 @@ def performance():
                         m["total_pl"] += t["pl_dollar"]
                     if t.get("roi_pct") is not None:
                         m["total_roi"] += t["roi_pct"]
+                    if pl_base is not None:
+                        year_pl_base += pl_base
                 else:
                     m["open_count"] += 1
                 m["trades"].append({"ticker": t["ticker"], "id": t["id"],
@@ -220,6 +245,8 @@ def performance():
                 overall["losses"] += 1
             if t.get("pl_dollar") is not None:
                 overall["total_pl"] += t["pl_dollar"]
+                if pl_base is not None:
+                    overall["total_pl_base"] += pl_base
             if t.get("roi_pct") is not None:
                 closed_rois.append(t["roi_pct"])
         else:
@@ -230,6 +257,25 @@ def performance():
     if overall["wins"] + overall["losses"] > 0:
         overall["win_rate"] = round(overall["wins"] / (overall["wins"] + overall["losses"]) * 100, 1)
     overall["total_pl"] = round(overall["total_pl"], 2)
+    overall["total_pl_base"] = round(overall["total_pl_base"], 2)
+    overall["year_pl_base"] = round(year_pl_base, 2)
+
+    # Return on Capital (selected year): realized P/L this year vs current account size
+    if portfolio_value > 0:
+        overall["return_on_capital"] = round(year_pl_base / portfolio_value * 100, 2)
+
+    # All-time CAGR: annualized growth of implied starting equity → current portfolio.
+    # Starting equity is inferred as current value minus all realized gains (no deposit
+    # history is tracked), annualized over the span since the first trade entry.
+    start_equity = portfolio_value - overall["total_pl_base"]
+    if portfolio_value > 0 and start_equity > 0 and first_entry:
+        try:
+            span_days = (date.today() - date.fromisoformat(first_entry)).days
+        except (ValueError, TypeError):
+            span_days = 0
+        years_elapsed = span_days / 365.25
+        if years_elapsed >= 0.5:  # too short a span makes annualizing meaningless
+            overall["cagr"] = round(((portfolio_value / start_equity) ** (1 / years_elapsed) - 1) * 100, 2)
 
     months = []
     for i in range(1, 13):

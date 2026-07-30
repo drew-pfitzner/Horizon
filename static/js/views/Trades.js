@@ -376,7 +376,7 @@ export const Trades = {
             <input type="number" v-model.number="year" style="width: 100px;">
           </div>
 
-          <div class="grid-4">
+          <div class="grid-6">
             <div class="stat">
               <div class="label">Open</div>
               <div class="value">{{ perf.overall.open }}</div>
@@ -394,6 +394,20 @@ export const Trades = {
               <div class="value" :class="{ 'text-green': perf.overall.avg_roi > 0, 'text-red': perf.overall.avg_roi < 0 }">
                 {{ perf.overall.avg_roi }}%
               </div>
+            </div>
+            <div class="stat" :title="year + ' realized P/L (' + fmtCcy(perf.overall.year_pl_base, perf.overall.portfolio_currency) + ') ÷ portfolio value (' + fmtCcy(perf.overall.portfolio_value, perf.overall.portfolio_currency) + ')'">
+              <div class="label">Return on Capital · {{ year }}</div>
+              <div class="value" v-if="perf.overall.return_on_capital != null" :class="{ 'text-green': perf.overall.return_on_capital > 0, 'text-red': perf.overall.return_on_capital < 0 }">
+                {{ perf.overall.return_on_capital }}%
+              </div>
+              <div class="value text-muted" v-else style="font-size: 1rem;">Set portfolio</div>
+            </div>
+            <div class="stat" title="All-time compound annual growth rate — annualized growth of implied starting equity (portfolio value minus all realized gains) to the current portfolio value, since your first trade.">
+              <div class="label">CAGR · all-time</div>
+              <div class="value" v-if="perf.overall.cagr != null" :class="{ 'text-green': perf.overall.cagr > 0, 'text-red': perf.overall.cagr < 0 }">
+                {{ perf.overall.cagr }}%
+              </div>
+              <div class="value text-muted" v-else style="font-size: 1rem;">—</div>
             </div>
           </div>
 
