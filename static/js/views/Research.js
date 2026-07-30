@@ -115,6 +115,7 @@ export const Research = {
       }
     },
     sortList(col) { toggleSortState(this.listSort, col); },
+    setDateToday() { this.form.date_researched = isoToday(); },
     // Colour the "Last Reviewed" cell/hint: muted when fresh, amber past ~90
     // days, red past ~180 — a nudge that the figures likely need another look.
     staleClass(n) {
@@ -501,7 +502,11 @@ export const Research = {
                     · {{ fmtDaysSince(form.date_researched) }}
                   </span>
                 </label>
-                <input type="date" v-model="form.date_researched">
+                <div style="display: flex; gap: 0.5rem; align-items: stretch;">
+                  <input type="date" v-model="form.date_researched" style="flex: 1;">
+                  <button type="button" class="btn-ghost" :disabled="formDaysSince === 0" @click="setDateToday"
+                          title="Set the research date to today">Today</button>
+                </div>
               </div>
               <div class="field">
                 <label>Decision</label>
