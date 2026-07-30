@@ -28,7 +28,7 @@
         <router-link to="/smart-money" active-class="active" @click="mobileMenuOpen = false">Smart Money</router-link>
         <router-link to="/settings" active-class="active" @click="mobileMenuOpen = false">Settings</router-link>
       </nav>
-      <div class="gate" :class="gateClass" v-if="gate">
+      <div class="gate" :class="gateClass" v-if="gate" :title="gateTitle">
         <span class="dot"></span>
         <span class="label">{{ gateLabel }}</span>
         <span class="size" v-if="gate.position_size_pct != null">{{ gate.position_size_pct }}%</span>

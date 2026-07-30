@@ -6,7 +6,7 @@ import { Alerts } from "./views/Alerts.js";
 import { Trades } from "./views/Trades.js";
 import { SmartMoney } from "./views/SmartMoney.js";
 import { Settings } from "./views/Settings.js";
-import { get, isoToday } from "./utils.js";
+import { get, isoToday, fmtCcy, fxRate } from "./utils.js";
 
 const { createApp } = Vue;
 const { createRouter, createWebHashHistory } = VueRouter;
@@ -29,7 +29,7 @@ const router = createRouter({
 
 const app = createApp({
   data() {
-    return { gate: null, mobileMenuOpen: false };
+    return { gate: null, mobileMenuOpen: false, portfolio: { value: 0, currency: "AUD" }, fxRates: {} };
   },
   computed: {
     gateClass() {
@@ -44,6 +44,18 @@ const app = createApp({
       if (this.gate.crash_risk === "NO_TRADE") return "NO TRADE";
       return "—";
     },
+    // Hover tooltip: per-stock position size in dollar terms (base + USD).
+    gateTitle() {
+      if (!this.gate || this.gate.crash_risk !== "OK") return "";
+      const pct = Number(this.gate.position_size_pct);
+      if (!pct || !this.portfolio.value) return "";
+      const baseCcy = (this.portfolio.currency || "AUD").toUpperCase();
+      const base = this.portfolio.value * pct / 100;
+      let s = `Position size ${pct}% = ${fmtCcy(base, baseCcy)} ${baseCcy}`;
+      const rate = fxRate(this.fxRates, baseCcy, "USD");
+      if (baseCcy !== "USD" && rate != null) s += ` ≈ ${fmtCcy(base * rate, "USD")} USD`;
+      return s;
+    },
   },
   methods: {
     async loadGate() {
@@ -55,9 +67,19 @@ const app = createApp({
         this.gate = null;
       }
     },
+    async loadPortfolioFx() {
+      try {
+        const [portfolio, fx] = await Promise.all([
+          get("/api/settings/portfolio"),
+          get("/api/settings/fx-rates"),
+        ]);
+        this.portfolio = { value: Number(portfolio.value) || 0, currency: portfolio.currency || "AUD" };
+        this.fxRates = fx || {};
+      } catch (e) { console.error("loadPortfolioFx", e); }
+    },
   },
   async mounted() {
-    await this.loadGate();
+    await Promise.all([this.loadGate(), this.loadPortfolioFx()]);
   },
 });
 

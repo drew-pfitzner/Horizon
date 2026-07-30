@@ -1,4 +1,6 @@
-import { get, post, del, isoToday, fmtDate, sortRows, toggleSortState } from "../utils.js";
+import { get, post, del, isoToday, fmtDate, fmtCcy, fxRate, sortRows, toggleSortState } from "../utils.js";
+
+const QUOTE_CCY = "USD"; // secondary display currency
 
 export const MarketCheck = {
   emits: ["gate-updated"],
@@ -17,10 +19,30 @@ export const MarketCheck = {
       history: [],
       pendingDelete: null,
       historySort: { key: "date", dir: "desc" },
+      portfolio: { value: 0, currency: "AUD" },
+      fxRates: {},
     };
   },
   computed: {
     sortedHistory() { return sortRows(this.history, this.historySort.key, this.historySort.dir); },
+    baseCcy() { return (this.portfolio.currency || "AUD").toUpperCase(); },
+    quoteCcy() { return QUOTE_CCY; },
+    showQuote() { return this.baseCcy !== this.quoteCcy; },
+    baseToQuoteRate() { return fxRate(this.fxRates, this.baseCcy, this.quoteCcy); },
+    // Preview position size (%) → dollar amount in the portfolio's base currency
+    // and the USD quote, mirroring the Home banner.
+    sizePct() {
+      const p = this.preview && this.preview.position_size_pct;
+      return p != null ? Number(p) : null;
+    },
+    sizeInBase() {
+      if (this.sizePct == null || !this.portfolio.value) return null;
+      return this.portfolio.value * this.sizePct / 100;
+    },
+    sizeInQuote() {
+      if (this.sizeInBase == null || this.baseToQuoteRate == null) return null;
+      return this.sizeInBase * this.baseToQuoteRate;
+    },
     stlColor() {
       const v = this.form.st_louis_fed;
       if (v == null || v === "") return "muted";
@@ -166,6 +188,14 @@ export const MarketCheck = {
         };
       }
     } catch (e) { console.error(e); }
+    try {
+      const [portfolio, fx] = await Promise.all([
+        get("/api/settings/portfolio"),
+        get("/api/settings/fx-rates"),
+      ]);
+      this.portfolio = { value: Number(portfolio.value) || 0, currency: portfolio.currency || "AUD" };
+      this.fxRates = fx || {};
+    } catch (e) { console.error(e); }
     await this.recompute();
     await this.loadHistory();
   },
@@ -237,6 +267,10 @@ export const MarketCheck = {
             <span :class="sizeBadge(preview.position_size_level)">
               {{ preview.position_size_level }} — {{ preview.position_size_pct }}%
             </span>
+            <div v-if="sizeInBase != null" class="text-muted" style="font-size: 0.8rem; margin-top: 0.4rem;">
+              {{ fmtCcy(sizeInBase, baseCcy) }} {{ baseCcy }}<template v-if="showQuote && sizeInQuote != null"> · ≈ {{ fmtCcy(sizeInQuote, quoteCcy) }} {{ quoteCcy }}</template>
+              <span v-if="showQuote && baseToQuoteRate != null"> &nbsp;({{ quoteCcy }}/{{ baseCcy }} @ {{ baseToQuoteRate.toFixed(4) }})</span>
+            </div>
           </div>
         </div>
       </div>
@@ -305,5 +339,5 @@ export const MarketCheck = {
       </div>
     </div>
   `,
-  setup() { return { fmtDate }; },
+  setup() { return { fmtDate, fmtCcy }; },
 };

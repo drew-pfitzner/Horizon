@@ -115,6 +115,32 @@ export function toggleSortState(state, col) {
   state.dir = state.dir === "asc" ? "desc" : "asc";
 }
 
+// Format a number as a whole-unit currency amount (no cents by default).
+export function fmtCcy(n, ccy, digits = 0) {
+  if (n == null || isNaN(n)) return "—";
+  try {
+    return Number(n).toLocaleString("en-US", {
+      style: "currency", currency: ccy || "USD",
+      minimumFractionDigits: digits, maximumFractionDigits: digits,
+    });
+  } catch (e) {
+    return `${ccy} ${Math.round(Number(n)).toLocaleString()}`;
+  }
+}
+
+// Look up a from→to FX rate in a { "AUD_USD": {rate}, ... } map, falling back to
+// the inverse pair. Returns 1 for same-currency, null if unknown.
+export function fxRate(rates, from, to) {
+  from = (from || "USD").toUpperCase();
+  to = (to || "USD").toUpperCase();
+  if (from === to) return 1;
+  const e = (rates || {})[`${from}_${to}`];
+  if (e && e.rate) return Number(e.rate);
+  const inv = (rates || {})[`${to}_${from}`];
+  if (inv && inv.rate) return 1 / Number(inv.rate);
+  return null;
+}
+
 // Today as YYYY-MM-DD using local time
 export function isoToday() {
   const d = new Date();
