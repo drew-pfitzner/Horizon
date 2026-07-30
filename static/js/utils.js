@@ -47,6 +47,25 @@ export function fmtDate(s) {
   return s.split("T")[0];
 }
 
+// Whole days between a YYYY-MM-DD (or ISO) date and today (local midnight).
+// Returns null if unparseable. Positive = in the past.
+export function daysSince(s) {
+  if (!s) return null;
+  const d = new Date(`${s.split("T")[0]}T00:00:00`);
+  if (isNaN(d)) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((today - d) / 86400000);
+}
+
+// Human label for a days-since count: "today", "1 day ago", "12 days ago".
+export function fmtDaysSince(s) {
+  const n = daysSince(s);
+  if (n == null) return "—";
+  if (n <= 0) return "today";
+  return `${n} day${n === 1 ? "" : "s"} ago`;
+}
+
 export function statusClass(status) {
   if (!status) return "";
   const s = status.toString().toLowerCase();

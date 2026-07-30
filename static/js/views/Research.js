@@ -1,4 +1,4 @@
-import { get, post, put, del, isoToday, fmtDate, decisionClass, assessmentClass, statusClass, fmtPct, fmtMoney, sortRows, toggleSortState } from "../utils.js";
+import { get, post, put, del, isoToday, fmtDate, daysSince, fmtDaysSince, decisionClass, assessmentClass, statusClass, fmtPct, fmtMoney, sortRows, toggleSortState } from "../utils.js";
 
 const FUND_FIELDS = [
   ["f_roa", "ROA > 8%"],
@@ -40,7 +40,13 @@ export const Research = {
   },
   computed: {
     fundFields() { return FUND_FIELDS; },
-    sortedList() { return sortRows(this.list, this.listSort.key, this.listSort.dir); },
+    // Decorate each row with days_since so it can be shown and sorted on.
+    listWithMeta() {
+      return this.list.map(r => ({ ...r, days_since: daysSince(r.date_researched) }));
+    },
+    sortedList() { return sortRows(this.listWithMeta, this.listSort.key, this.listSort.dir); },
+    // Days since the ticker currently open in the form was last researched.
+    formDaysSince() { return daysSince(this.form.date_researched); },
     sortedHolders() {
       if (!this.smHolders) return [];
       return sortRows(this.smHolders.holders || [], this.smSort.key, this.smSort.dir);
@@ -109,6 +115,14 @@ export const Research = {
       }
     },
     sortList(col) { toggleSortState(this.listSort, col); },
+    // Colour the "Last Reviewed" cell/hint: muted when fresh, amber past ~90
+    // days, red past ~180 — a nudge that the figures likely need another look.
+    staleClass(n) {
+      if (n == null) return "text-muted";
+      if (n >= 180) return "text-red";
+      if (n >= 90) return "text-orange";
+      return "text-muted";
+    },
     sortHolders(col) { toggleSortState(this.smSort, col); },
     openPicker() {
       this.picker = { open: true, ticker: "", match: null, checked: false };
@@ -392,6 +406,7 @@ export const Research = {
               <tr>
                 <sort-th col="ticker" :sort="listSort" @sort="sortList">Ticker</sort-th>
                 <sort-th col="date_researched" :sort="listSort" @sort="sortList">Date</sort-th>
+                <sort-th col="days_since" :sort="listSort" @sort="sortList" :num="true">Last Reviewed</sort-th>
                 <sort-th col="fundamentals_score" :sort="listSort" @sort="sortList">Score</sort-th>
                 <sort-th col="decision" :sort="listSort" @sort="sortList">Decision</sort-th>
                 <sort-th col="valuation_assessment" :sort="listSort" @sort="sortList">Valuation</sort-th>
@@ -402,6 +417,7 @@ export const Research = {
               <tr v-for="r in sortedList" :key="r.id" class="clickable" @click="editForm(r)">
                 <td><strong>{{ r.ticker }}</strong> <span class="text-muted">{{ r.company_name }}</span></td>
                 <td>{{ fmtDate(r.date_researched) }}</td>
+                <td :class="staleClass(r.days_since)">{{ fmtDaysSince(r.date_researched) }}</td>
                 <td><span class="score-pill">{{ r.fundamentals_score }}/10</span></td>
                 <td><span :class="decisionClass(r.decision)">{{ r.decision || 'NO_ACTION' }}</span></td>
                 <td>
@@ -480,7 +496,11 @@ export const Research = {
                 <input type="text" v-model="form.company_name">
               </div>
               <div class="field">
-                <label>Date Researched</label>
+                <label>Date Researched
+                  <span v-if="formDaysSince != null" :class="staleClass(formDaysSince)" style="font-weight: 400; font-size: 0.8rem;">
+                    · {{ fmtDaysSince(form.date_researched) }}
+                  </span>
+                </label>
                 <input type="date" v-model="form.date_researched">
               </div>
               <div class="field">
@@ -680,7 +700,7 @@ export const Research = {
             <strong>{{ picker.match.ticker }}</strong>
             <span class="text-muted"> — {{ picker.match.company_name || 'no name' }}</span>
             <div class="text-muted" style="font-size: 0.8rem; margin-top: 0.25rem;">
-              Last researched {{ fmtDate(picker.match.date_researched) }} · Score {{ picker.match.fundamentals_score }}/10 ·
+              Last researched {{ fmtDate(picker.match.date_researched) }} ({{ fmtDaysSince(picker.match.date_researched) }}) · Score {{ picker.match.fundamentals_score }}/10 ·
               <span :class="decisionClass(picker.match.decision)">{{ picker.match.decision || 'NO_ACTION' }}</span>
             </div>
           </div>
@@ -708,5 +728,5 @@ export const Research = {
       </div>
     </div>
   `,
-  setup() { return { fmtDate, decisionClass, assessmentClass, statusClass, fmtPct, fmtMoney }; },
+  setup() { return { fmtDate, fmtDaysSince, decisionClass, assessmentClass, statusClass, fmtPct, fmtMoney }; },
 };
