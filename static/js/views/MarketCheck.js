@@ -203,6 +203,17 @@ export const MarketCheck = {
     <div>
       <h1>Market Check</h1>
 
+      <div v-if="preview && preview.position_size_level" class="position-banner">
+        <div class="position-banner-label">Position Size</div>
+        <span :class="sizeBadge(preview.position_size_level)">
+          {{ preview.position_size_level }} — {{ preview.position_size_pct }}%
+        </span>
+        <div v-if="sizeInBase != null" class="position-banner-amounts">
+          {{ fmtCcy(sizeInBase, baseCcy) }} {{ baseCcy }}<template v-if="showQuote && sizeInQuote != null"> · ≈ {{ fmtCcy(sizeInQuote, quoteCcy) }} {{ quoteCcy }}</template>
+          <span v-if="showQuote && baseToQuoteRate != null" class="text-muted">&nbsp;({{ quoteCcy }}/{{ baseCcy }} @ {{ baseToQuoteRate.toFixed(4) }})</span>
+        </div>
+      </div>
+
       <div class="grid-2">
         <div class="card">
           <h3>Crash / Recession</h3>
@@ -261,16 +272,6 @@ export const MarketCheck = {
               <input type="number" step="0.01" v-model.number="form.fear_greed">
             </div>
             <small class="text-muted">≤ 45 LOW · &lt; 55 MED · ≥ 55 HIGH</small>
-          </div>
-          <div v-if="preview && preview.position_size_level" class="field">
-            <label>Position Size</label>
-            <span :class="sizeBadge(preview.position_size_level)">
-              {{ preview.position_size_level }} — {{ preview.position_size_pct }}%
-            </span>
-            <div v-if="sizeInBase != null" class="text-muted" style="font-size: 0.8rem; margin-top: 0.4rem;">
-              {{ fmtCcy(sizeInBase, baseCcy) }} {{ baseCcy }}<template v-if="showQuote && sizeInQuote != null"> · ≈ {{ fmtCcy(sizeInQuote, quoteCcy) }} {{ quoteCcy }}</template>
-              <span v-if="showQuote && baseToQuoteRate != null"> &nbsp;({{ quoteCcy }}/{{ baseCcy }} @ {{ baseToQuoteRate.toFixed(4) }})</span>
-            </div>
           </div>
         </div>
       </div>

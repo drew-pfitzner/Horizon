@@ -76,6 +76,14 @@ a:hover { text-decoration: underline; }
 .gate.no_trade .dot { background: var(--red); }
 .gate.unknown .dot { background: var(--text-2); }
 .gate .size { color: var(--text-2); font-weight: 500; }
+.position-banner {
+  display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
+  text-align: center; margin: 0 auto 1rem; padding: 0.75rem 1rem;
+  max-width: 460px; background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.position-banner-label { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); font-weight: 600; }
+.position-banner-amounts { font-size: 0.85rem; color: var(--text-2); }
 .gate { position: relative; cursor: default; }
 .gate-pop {
   position: absolute; top: calc(100% + 8px); right: 0;
