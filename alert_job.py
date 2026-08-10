@@ -12,17 +12,19 @@ Reuses the sm_job background-thread + ring-buffer pattern.
 """
 import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from db import get_db, get_setting
 from prices import fetch_history
 from signals import evaluate
-from notify import push_signal
+from notify import push_signal, action_for
 
 ET = ZoneInfo("America/New_York")
 MARKET_CLOSE_HOUR = 16  # 4pm ET; today's bar isn't final before this
 _MAX_LOG_LINES = 200
+_SNAPSHOT_WORKERS = 6  # parallel price fetches for the read-only snapshot
 
 _run_lock = threading.Lock()      # single-flight: one evaluation pass at a time
 _state_lock = threading.Lock()
@@ -188,6 +190,85 @@ def run_checks():
     finally:
         _set(finished_at=datetime.utcnow().isoformat() + "Z")
         _run_lock.release()
+
+
+# ─────────────────────────── read-only snapshot ───────────────────────────
+
+def _latest_signal(series, directions):
+    """Most recent edge-triggered signal in the series, for the given directions."""
+    for s in reversed(series):
+        for direction in directions:
+            if s["buy" if direction == "BUY" else "sell"]:
+                return {"direction": direction, "date": s["date"], "close": s["close"]}
+    return None
+
+
+def current_state():
+    """Snapshot of what every active watch looks like *right now*.
+
+    Deliberately ignores the dedupe watermark and never pushes or writes. A
+    normal check can't answer "is there a signal?" — a freshly armed ticker, or
+    one whose signal already fired, is silent by design — so this is the view
+    you need when the alert you expected never arrived.
+
+    Per watch: the latest completed bar's indicators, whether that bar is itself
+    an edge, and the most recent signal in the 2y window tagged with whether it
+    was actually delivered ('sent'), never sent because the watermark was already
+    past it ('missed'), or still eligible for the next check ('pending').
+    """
+    now_et = datetime.now(ET)
+    signal_params = get_setting("alert_signal", None)
+    with get_db() as db:
+        watches = [dict(r) for r in db.execute(
+            "SELECT ticker, bucket, kind, last_checked_bar FROM alert_watch "
+            "WHERE active = 1 ORDER BY ticker"
+        ).fetchall()]
+        delivered = {(r["ticker"], r["bar_date"], r["signal_dir"]) for r in db.execute(
+            "SELECT ticker, bar_date, signal_dir FROM alert_log "
+            "WHERE ok = 1 AND bar_date IS NOT NULL"
+        ).fetchall()}
+    if not watches:
+        return []
+
+    # Network-bound (one price fetch per ticker), so fan out.
+    with ThreadPoolExecutor(max_workers=_SNAPSHOT_WORKERS) as pool:
+        histories = list(pool.map(lambda w: fetch_history(w["ticker"]), watches))
+
+    out = []
+    for w, (bars, source) in zip(watches, histories):
+        row = {"ticker": w["ticker"], "bucket": w["bucket"], "kind": w["kind"],
+               "last_checked_bar": w["last_checked_bar"], "source": source,
+               "bar_date": None, "close": None, "rsi": None, "k": None, "d": None,
+               "signal": None, "action": None, "last_signal": None, "error": None}
+        bars = _completed_bars(bars, now_et) if bars else []
+        if not bars:
+            row["error"] = "price fetch failed" if not source else "no completed bars"
+            out.append(row)
+            continue
+
+        series = evaluate(bars, kind=w["kind"], params=signal_params)
+        directions = ["BUY"] if w["bucket"] == "BUY" else ["BUY", "SELL"]
+        latest = series[-1]
+        row.update(bar_date=latest["date"], close=latest["close"],
+                   rsi=latest["rsi"], k=latest["k"], d=latest["d"])
+        row["signal"] = next(
+            (dd for dd in directions if latest["buy" if dd == "BUY" else "sell"]), None)
+        if row["signal"]:
+            row["action"] = action_for(w["bucket"], row["signal"])
+
+        last = _latest_signal(series, directions)
+        if last:
+            last["action"] = action_for(w["bucket"], last["direction"])
+            key = (w["ticker"], last["date"], last["direction"])
+            if key in delivered:
+                last["delivery"] = "sent"
+            elif w["last_checked_bar"] and last["date"] <= w["last_checked_bar"]:
+                last["delivery"] = "missed"
+            else:
+                last["delivery"] = "pending"
+            row["last_signal"] = last
+        out.append(row)
+    return out
 
 
 # ─────────────────────────── scheduler thread ───────────────────────────

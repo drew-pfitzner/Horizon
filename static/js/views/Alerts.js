@@ -36,6 +36,8 @@ export const Alerts = {
       savingSignal: false,
       checking: false,
       showSignal: false,
+      now: null,
+      loadingNow: false,
       pollTimer: null,
       msg: null,
       err: null,
@@ -114,8 +116,29 @@ export const Alerts = {
       catch (e) { this.flash(e.message, true); }
     },
     async remove(w) {
-      try { await del(`/api/alerts/watches/${w.id}`); await this.refresh(); }
+      try {
+        await del(`/api/alerts/watches/${w.id}`);
+        this.now = this.now ? this.now.filter(r => r.ticker !== w.ticker) : null;
+        await this.refresh();
+      } catch (e) { this.flash(e.message, true); }
+    },
+
+    // Read-only "what does the signal look like right now?" — no push, no dedupe.
+    async loadNow() {
+      this.loadingNow = true;
+      try { this.now = await get("/api/alerts/now") || []; }
       catch (e) { this.flash(e.message, true); }
+      finally { this.loadingNow = false; }
+    },
+    deliveryLabel(d) {
+      if (d === "sent") return "alerted";
+      if (d === "missed") return "never sent";
+      return "next check";
+    },
+    deliveryClass(d) {
+      if (d === "sent") return "text-muted";
+      if (d === "missed") return "text-red";
+      return "text-green";
     },
 
     async saveSignal() {
@@ -151,6 +174,7 @@ export const Alerts = {
     stopPolling() {
       if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
     },
+    fx(v, digits = 1) { return v == null ? "—" : Number(v).toFixed(digits); },
     kindBadge(kind) { return kind === "Invest" ? "blue" : "green"; },
     actionBadge(a) { return a === "SELL" ? "red" : (a === "ADD" ? "orange" : "green"); },
   },
@@ -277,6 +301,60 @@ export const Alerts = {
         <p class="text-muted sig-note">RSI rising bars: 0 = off, 1 = today &gt; yesterday, 2+ = N consecutive up-bars.
           These apply to every watched ticker on the next check.</p>
       </template>
+    </div>
+
+    <!-- Signal right now (read-only; ignores dedupe) -->
+    <div class="card">
+      <div class="card-head">
+        <h3>Signal now</h3>
+        <span class="text-muted">latest closed bar — ignores dedupe, sends nothing</span>
+        <div class="spacer"></div>
+        <button class="btn-ghost sm" :disabled="loadingNow" @click="loadNow">
+          {{ loadingNow ? 'Loading…' : (now ? '↻ Refresh' : 'Show current signals') }}
+        </button>
+      </div>
+
+      <table v-if="now && now.length" class="table">
+        <thead><tr>
+          <th>Ticker</th><th>List</th><th>Bar</th><th class="num">Price</th>
+          <th class="num">RSI</th><th class="num">%K</th><th class="num">%D</th>
+          <th>Now</th><th>Last signal</th>
+        </tr></thead>
+        <tbody>
+          <tr v-for="r in now" :key="r.ticker">
+            <td><strong>{{ r.ticker }}</strong></td>
+            <td>{{ r.bucket }}</td>
+            <td class="text-muted">{{ r.bar_date || '—' }}</td>
+            <td class="num">{{ fx(r.close, 2) }}</td>
+            <td class="num">{{ fx(r.rsi) }}</td>
+            <td class="num">{{ fx(r.k) }}</td>
+            <td class="num">{{ fx(r.d) }}</td>
+            <td>
+              <span v-if="r.error" class="text-red" :title="r.error">error</span>
+              <span v-else-if="r.action" class="badge" :class="actionBadge(r.action)">{{ r.action }}</span>
+              <span v-else class="text-muted">—</span>
+            </td>
+            <td>
+              <template v-if="r.last_signal">
+                <span class="badge" :class="actionBadge(r.last_signal.action)">{{ r.last_signal.action }}</span>
+                <span class="text-muted"> {{ r.last_signal.date }} · </span>
+                <span :class="deliveryClass(r.last_signal.delivery)"
+                      :title="r.last_signal.delivery === 'missed' ? 'The watermark was already past this bar when it was evaluated — no push was ever sent for it.' : ''">
+                  {{ deliveryLabel(r.last_signal.delivery) }}
+                </span>
+              </template>
+              <span v-else class="text-muted">none in 2y</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else-if="now" class="empty">No active watches.</p>
+      <p v-else class="empty">Press “Show current signals” to evaluate every watched ticker against the latest closed bar.</p>
+
+      <p v-if="now && now.length" class="text-muted sig-note">
+        “Now” is an edge on the latest closed bar, so it clears the day after it fires — “Last signal” is the one to read.
+        <span class="text-red">never sent</span> means the ticker was armed past that bar (removing and re-adding a ticker no longer does this).
+      </p>
     </div>
 
     <!-- Recent alerts -->

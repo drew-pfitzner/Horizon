@@ -57,8 +57,8 @@ def _kind_from_decision(decision):
 def list_watches():
     with get_db() as db:
         rows = db.execute(
-            "SELECT id, ticker, bucket, kind, active, created_at "
-            "FROM alert_watch ORDER BY ticker"
+            "SELECT id, ticker, bucket, kind, active, created_at, last_checked_bar "
+            "FROM alert_watch WHERE active = 1 ORDER BY ticker"
         ).fetchall()
     watches = [dict(r) for r in rows]
     return jsonify({"success": True, "data": {
@@ -131,8 +131,15 @@ def update_watch(wid):
 
 @bp.route("/watches/<int:wid>", methods=["DELETE"])
 def delete_watch(wid):
+    """Soft delete — deactivate, keeping the row (and its last_checked_bar).
+
+    A hard DELETE also destroyed the dedupe watermark, so re-adding the ticker
+    came back with last_checked_bar = NULL and the next check silently *armed*
+    it at the current bar instead of alerting (see alert_job.run_checks). That
+    made a remove/re-add round trip swallow the very signal you were chasing.
+    """
     with get_db() as db:
-        db.execute("DELETE FROM alert_watch WHERE id = ?", (wid,))
+        db.execute("UPDATE alert_watch SET active = 0 WHERE id = ?", (wid,))
     return jsonify({"success": True})
 
 
@@ -141,8 +148,10 @@ def seed_suggestions():
     """Suggestions the user can confirm: open trades → Held, TRADE/INVEST
     research → Buy. Excludes tickers already watched."""
     with get_db() as db:
+        # Only active watches suppress a suggestion — a ticker you removed should
+        # be offered again (re-adding it revives the row, watermark intact).
         watched = {r["ticker"] for r in
-                   db.execute("SELECT ticker FROM alert_watch").fetchall()}
+                   db.execute("SELECT ticker FROM alert_watch WHERE active = 1").fetchall()}
         held = db.execute(
             "SELECT DISTINCT ticker FROM trades WHERE exit_date IS NULL"
         ).fetchall()
@@ -227,6 +236,14 @@ def check_now():
         return jsonify({"success": False, "error": "a check is already running"}), 409
     threading.Thread(target=alert_job.run_checks, daemon=True).start()
     return jsonify({"success": True})
+
+
+@bp.route("/now", methods=["GET"])
+def signal_now():
+    """Current signal state for every active watch, ignoring dedupe. Read-only:
+    sends nothing and moves no watermark. Network-bound, so the UI calls it on
+    an explicit button press, not on mount."""
+    return jsonify({"success": True, "data": alert_job.current_state()})
 
 
 @bp.route("/status", methods=["GET"])
