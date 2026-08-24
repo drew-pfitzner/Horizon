@@ -40,9 +40,20 @@ export const Research = {
   },
   computed: {
     fundFields() { return FUND_FIELDS; },
-    // Decorate each row with days_since so it can be shown and sorted on.
+    // Decorate each row with days_since and the trade/invest signal so both can
+    // be shown and sorted on. signal_rank orders INVEST → TRADE → none ascending,
+    // so the column's first click gives the useful order.
     listWithMeta() {
-      return this.list.map(r => ({ ...r, days_since: daysSince(r.date_researched) }));
+      return this.list.map(r => {
+        const canTrade = !!(r.f_roe && r.f_npm && r.sm_holding_5pct);
+        const canInvest = canTrade && !!r.price_below_mos;
+        return {
+          ...r,
+          days_since: daysSince(r.date_researched),
+          signal: canInvest ? "CAN INVEST" : (canTrade ? "CAN TRADE" : null),
+          signal_rank: canInvest ? 0 : (canTrade ? 1 : 2),
+        };
+      });
     },
     sortedList() { return sortRows(this.listWithMeta, this.listSort.key, this.listSort.dir); },
     // Days since the ticker currently open in the form was last researched.
@@ -126,6 +137,12 @@ export const Research = {
       }
     },
     sortList(col) { toggleSortState(this.listSort, col); },
+    // Badge colour for the list's Signal column: invest is the stronger call.
+    signalClass(s) {
+      if (s === "CAN INVEST") return "badge green";
+      if (s === "CAN TRADE") return "badge blue";
+      return "badge";
+    },
     setDateToday() { this.form.date_researched = isoToday(); },
     // Colour the "Last Reviewed" cell/hint: muted when fresh, amber past ~90
     // days, red past ~180 — a nudge that the figures likely need another look.
@@ -423,7 +440,7 @@ export const Research = {
                 <sort-th col="days_since" :sort="listSort" @sort="sortList" :num="true">Last Reviewed</sort-th>
                 <sort-th col="fundamentals_score" :sort="listSort" @sort="sortList">Score</sort-th>
                 <sort-th col="decision" :sort="listSort" @sort="sortList">Decision</sort-th>
-                <sort-th col="valuation_assessment" :sort="listSort" @sort="sortList">Valuation</sort-th>
+                <sort-th col="signal_rank" :sort="listSort" @sort="sortList">Signal</sort-th>
                 <th></th>
               </tr>
             </thead>
@@ -435,7 +452,8 @@ export const Research = {
                 <td><span class="score-pill">{{ r.fundamentals_score }}/10</span></td>
                 <td><span :class="decisionClass(r.decision)">{{ r.decision || 'NO_ACTION' }}</span></td>
                 <td>
-                  <span :class="assessmentClass(r.valuation_assessment)" v-if="r.valuation_assessment">{{ r.valuation_assessment }}</span>
+                  <span :class="signalClass(r.signal)" v-if="r.signal"
+                        :title="'Valuation: ' + (r.valuation_assessment || '—')">{{ r.signal }}</span>
                   <span class="text-muted" v-else>—</span>
                 </td>
                 <td>
