@@ -684,6 +684,42 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .sig-note { font-size: 0.8rem; margin: 0.4rem 0 0; }
 .check-inline { display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.5rem; font-size: 0.9rem; cursor: pointer; }
 
+/* Minimal tap-through rows (Signal now / Recent alerts) — detail lives in the modal */
+.mini-list { list-style: none; margin: 0; padding: 0; }
+.mini-row {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.65rem 0.15rem;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+.mini-row:first-child { border-top: none; }
+.mini-row:hover, .mini-row:focus-visible { background: var(--bg-3, rgba(255,255,255,0.03)); outline: none; }
+.mini-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+.mini-ticker { font-weight: 600; letter-spacing: 0.02em; }
+.mini-sub { flex-basis: 100%; font-size: 0.8rem; }
+.mini-list-tag, .tag-now {
+  font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted, #8b949e); border: 1px solid var(--border);
+  border-radius: 999px; padding: 0.05rem 0.45rem;
+}
+.tag-now { color: var(--accent); border-color: var(--accent); }
+.mini-chev { color: var(--text-muted, #8b949e); font-size: 1.1rem; line-height: 1; flex-shrink: 0; }
+
+/* Detail modal */
+.detail-modal { max-width: 420px; }
+.detail-head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.9rem; }
+.detail-head h3 { margin: 0; font-size: 1.2rem; }
+.detail-head .spacer { flex: 1; }
+.detail-list { margin: 0; }
+.detail-list > div {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+  padding: 0.45rem 0; border-top: 1px solid var(--border);
+}
+.detail-list > div:first-child { border-top: none; }
+.detail-list dt { font-size: 0.82rem; color: var(--text-muted, #8b949e); flex-shrink: 0; }
+.detail-list dd { margin: 0; text-align: right; font-size: 0.9rem; }
+.detail-list dd.num { font-variant-numeric: tabular-nums; }
+
 /* Settings: ntfy field block */
 .settings-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem 1.25rem; margin-bottom: 0.5rem; }
 .settings-fields .field { display: flex; flex-direction: column; gap: 0.25rem; }
