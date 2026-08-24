@@ -98,9 +98,20 @@ export const Research = {
     async loadList() {
       try { this.list = await get("/api/research"); } catch (e) { console.error(e); }
     },
+    // The Prefill banner (and any unsaved valuation preview) belongs to one
+    // stock's editing session — drop it whenever we leave or re-enter the form,
+    // otherwise the previous ticker's verdict/warnings linger on the next stock.
+    clearPrefillState() {
+      this.prefillInfo = null;
+      this.prefillError = null;
+      this.prefilling = false;
+      this.valuationPreview = false;
+      this.prefillValuationInputs = null;
+    },
     newForm(prefillTicker) {
       this.form = this._emptyForm();
       if (prefillTicker) this.form.ticker = String(prefillTicker).trim().toUpperCase();
+      this.clearPrefillState();
       this.smHolders = null;
       this.valuation = null;
       this.saveError = null;
@@ -160,6 +171,7 @@ export const Research = {
     },
     editForm(row) {
       this.form = { ...this._emptyForm(), ...row };
+      this.clearPrefillState();
       Object.keys(this.form).forEach(k => {
         if (typeof row[k] === "number" && (k.startsWith("f_") || k.endsWith("_ok") || k === "price_below_mos" || k === "sm_holding_5pct" || k === "sm_top3_increasing" || k === "market_cap_ok")) {
           this.form[k] = row[k] === 1;
@@ -177,7 +189,7 @@ export const Research = {
     scrollTop() {
       this.$nextTick(() => window.scrollTo({ top: 0, behavior: "auto" }));
     },
-    cancel() { this.mode = "list"; this.smHolders = null; this.saveError = null; },
+    cancel() { this.mode = "list"; this.smHolders = null; this.saveError = null; this.clearPrefillState(); },
     async onTickerBlur() {
       await Promise.all([this.fetchSmartMoney(), this.fetchValuation(), this.prefillCompany(false)]);
     },
@@ -200,6 +212,9 @@ export const Research = {
       this.prefillInfo = null;
       try {
         const d = await get(`/api/prefill/${t}`);
+        // Bail if the form moved to another stock while the request was in flight,
+        // so a stale response can't repaint the banner for the wrong ticker.
+        if ((this.form.ticker || "").trim().toUpperCase() !== t) return;
         if (d.company_name) this.form.company_name = d.company_name;
         const flagKeys = [
           "f_roa", "f_roe", "f_roi", "f_npm", "f_eps_5yr", "f_eps_1yr", "f_eps_next",
@@ -256,10 +271,7 @@ export const Research = {
       ["market_cap_ok", "sm_holding_5pct", "sm_top3_increasing", "liquidity_ok", "price_below_mos"]
         .forEach(k => { this.form[k] = false; });
       this.valuation = null;
-      this.valuationPreview = false;
-      this.prefillValuationInputs = null;
-      this.prefillInfo = null;
-      this.prefillError = null;
+      this.clearPrefillState();
     },
     // One-click: add this ticker to the Buy alerts list, carrying the current
     // decision as the alert kind (INVEST → Invest, else Trade).
@@ -360,7 +372,8 @@ export const Research = {
     },
     async saveAndReturn() {
       const ok = await this._doSave();
-      if (ok) { this.mode = "list"; this.smHolders = null; }
+      // _doSave has already persisted any prefilled valuation by this point.
+      if (ok) { this.mode = "list"; this.smHolders = null; this.clearPrefillState(); }
     },
     askDelete(row) { this.pendingDelete = row; },
     cancelDelete() { this.pendingDelete = null; },
