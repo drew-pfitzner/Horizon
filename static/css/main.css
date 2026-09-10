@@ -190,6 +190,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-primary:hover { filter: brightness(1.1); border-color: var(--accent); }
 .btn-danger { background: var(--red); border-color: var(--red); color: #fff; }
 .btn-ghost { background: transparent; }
+/* "Already watching" state — stays legible while disabled, so the button reads
+   as a status rather than a dimmed-out action. */
+.btn-ghost.is-watched { color: var(--green); border-color: var(--green); }
+.btn-ghost.is-watched:disabled { opacity: 1; }
 
 /* Edit-view action bar (Prefill / Clear / Save / Cancel) */
 .edit-actions { display: flex; align-items: stretch; gap: 0.4rem; }

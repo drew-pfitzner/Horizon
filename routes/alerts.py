@@ -67,6 +67,21 @@ def list_watches():
     }})
 
 
+@bp.route("/watch-status", methods=["GET"])
+def watch_status():
+    """Is this ticker already on an active watch list? Lets the Research view
+    show the state of the "Watch to Buy" button before it's pressed."""
+    ticker = (request.args.get("ticker") or "").strip().upper()
+    if not ticker:
+        return jsonify({"success": False, "error": "ticker required"}), 400
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id, ticker, bucket, kind FROM alert_watch "
+            "WHERE ticker = ? AND active = 1", (ticker,)
+        ).fetchone()
+    return jsonify({"success": True, "data": dict(row) if row else None})
+
+
 @bp.route("/watches", methods=["POST"])
 def add_watch():
     body = request.get_json(silent=True) or {}
