@@ -135,6 +135,29 @@ def put_max_position():
     return jsonify({"success": True, "data": v})
 
 
+@bp.route("/commission-pct", methods=["GET"])
+def get_commission_pct():
+    data = get_setting("commission_pct", DEFAULT_SETTINGS["commission_pct"])
+    return jsonify({"success": True, "data": data})
+
+
+@bp.route("/commission-pct", methods=["PUT"])
+def put_commission_pct():
+    from routes.trades import recompute_all_pl, recompute_open_positions
+    p = request.get_json(force=True)
+    try:
+        v = float(p.get("value"))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "value must be numeric"}), 400
+    if v < 0 or v > 10:
+        return jsonify({"success": False, "error": "value must be between 0 and 10"}), 400
+    set_setting("commission_pct", v)
+    # Every trade without an explicit fee override derives from this rate.
+    recomputed = recompute_all_pl()
+    recompute_open_positions()
+    return jsonify({"success": True, "data": {"value": v, "recomputed": recomputed}})
+
+
 @bp.route("/fx-rates", methods=["GET"])
 def get_fx_rates():
     rates = get_setting("fx_rates", {}) or {}

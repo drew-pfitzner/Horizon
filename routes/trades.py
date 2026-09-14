@@ -6,8 +6,30 @@ from db import get_db, get_setting
 bp = Blueprint("trades", __name__)
 
 
-def _portfolio_pos_pct(entry_price, shares, currency):
-    """Compute position size % vs configured portfolio, in base currency."""
+def commission_pct():
+    try:
+        return float(get_setting("commission_pct", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _fee(notional, stored):
+    """Resolve a commission. A stored value (including 0) wins; NULL derives the
+    fee from the configured commission %, which is how IBKR bills fractional
+    fills — a flat percentage of trade value, per side."""
+    if stored is not None:
+        try:
+            return float(stored)
+        except (TypeError, ValueError):
+            pass
+    if not notional:
+        return 0.0
+    return round(abs(notional) * commission_pct() / 100, 4)
+
+
+def _portfolio_pos_pct(entry_price, shares, currency, entry_fee=None):
+    """Compute position size % vs configured portfolio, in base currency.
+    Sized on what the position actually cost, commission included."""
     if not entry_price or not shares:
         return None
     portfolio = get_setting("portfolio", {"value": 0, "currency": "AUD"}) or {}
@@ -22,7 +44,8 @@ def _portfolio_pos_pct(entry_price, shares, currency):
     fx = get_fx_rate((currency or "USD").upper(), base_cur)
     if fx is None:
         return None
-    return round(entry_price * shares * fx / base_val * 100, 2)
+    cost = entry_price * shares + _fee(entry_price * shares, entry_fee)
+    return round(cost * fx / base_val * 100, 2)
 
 
 def recompute_open_positions():
@@ -36,22 +59,49 @@ def recompute_open_positions():
     count = 0
     with get_db() as db:
         rows = db.execute(
-            "SELECT id, entry_price, shares, currency FROM trades "
+            "SELECT id, entry_price, shares, currency, entry_fee FROM trades "
             "WHERE exit_date IS NULL OR exit_date = ''"
         ).fetchall()
         for r in rows:
-            pct = _portfolio_pos_pct(r["entry_price"], r["shares"], r["currency"])
+            pct = _portfolio_pos_pct(r["entry_price"], r["shares"], r["currency"], r["entry_fee"])
             if pct is not None:
                 db.execute("UPDATE trades SET position_size_pct=? WHERE id=?", (pct, r["id"]))
                 count += 1
     return count
 
 
-def _compute_pl(entry_price, shares, exit_price, entry_date, exit_date):
+def recompute_all_pl():
+    """Re-derive P/L, ROI and W/L for every closed trade. Called when the
+    commission rate changes, since that moves the number on trades already
+    logged."""
+    count = 0
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM trades WHERE exit_date IS NOT NULL AND exit_date != ''"
+        ).fetchall()
+        for r in rows:
+            pl, roi, days, win_loss = _compute_pl(
+                r["entry_price"], r["shares"], r["exit_price"],
+                r["entry_date"], r["exit_date"], r["entry_fee"], r["exit_fee"],
+            )
+            db.execute(
+                "UPDATE trades SET pl_dollar=?, roi_pct=?, days_held=?, win_loss=? WHERE id=?",
+                (pl, roi, days, win_loss, r["id"]),
+            )
+            count += 1
+    return count
+
+
+def _compute_pl(entry_price, shares, exit_price, entry_date, exit_date,
+                entry_fee=None, exit_fee=None):
+    """Realized P/L net of commission on both sides. Leaving commission out is
+    what made small fractional trades read as wins when the broker had eaten the
+    gain — CTSH cleared $0.16 gross and settled at -$0.30 once fees landed."""
     if exit_price is None or entry_price is None or shares is None:
         return None, None, None, "HOLD"
-    pl = (exit_price - entry_price) * shares
-    cost = entry_price * shares
+    cost = entry_price * shares + _fee(entry_price * shares, entry_fee)
+    proceeds = exit_price * shares - _fee(exit_price * shares, exit_fee)
+    pl = proceeds - cost
     roi = (pl / cost * 100) if cost else 0.0
     days = None
     if entry_date and exit_date:
@@ -89,9 +139,12 @@ def create():
     currency = (p.get("currency") or "USD").upper()
     exit_date = p.get("exit_date")
     exit_price = float(p.get("exit_price")) if p.get("exit_price") not in (None, "") else None
+    entry_fee = float(p["entry_fee"]) if p.get("entry_fee") not in (None, "") else None
+    exit_fee = float(p["exit_fee"]) if p.get("exit_fee") not in (None, "") else None
 
-    pl, roi, days, win_loss = _compute_pl(entry_price, shares, exit_price, entry_date, exit_date)
-    auto_pos = _portfolio_pos_pct(entry_price, shares, currency)
+    pl, roi, days, win_loss = _compute_pl(entry_price, shares, exit_price, entry_date, exit_date,
+                                          entry_fee, exit_fee)
+    auto_pos = _portfolio_pos_pct(entry_price, shares, currency, entry_fee)
     if auto_pos is not None:
         pos_pct = auto_pos
     now = datetime.now().isoformat(timespec="seconds")
@@ -101,13 +154,15 @@ def create():
             INSERT INTO trades (
                 ticker, company_name, sector, industry, strategy, currency,
                 entry_date, entry_price, shares, position_size_pct,
-                exit_date, exit_price, pl_dollar, roi_pct, days_held, win_loss,
+                exit_date, exit_price, entry_fee, exit_fee,
+                pl_dollar, roi_pct, days_held, win_loss,
                 notes, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             ticker, p.get("company_name") or "", p.get("sector") or "", p.get("industry") or "",
             strategy, currency, entry_date, entry_price, shares, pos_pct,
-            exit_date, exit_price, pl, roi, days, win_loss,
+            exit_date, exit_price, entry_fee, exit_fee,
+            pl, roi, days, win_loss,
             p.get("notes") or "", now, now,
         ))
         tid = cur.lastrowid
@@ -137,15 +192,22 @@ def update(tid):
                 ex[k] = float(p[k])
             elif k == "exit_price" and "exit_price" in p and p[k] in (None, ""):
                 ex[k] = None
+        # Fees are three-state: absent = leave alone, blank = back to auto, a
+        # number (including 0) = override.
+        for k in ("entry_fee", "exit_fee"):
+            if k in p:
+                ex[k] = float(p[k]) if p[k] not in (None, "") else None
 
         pl, roi, days, win_loss = _compute_pl(
             ex.get("entry_price"), ex.get("shares"),
             ex.get("exit_price"), ex.get("entry_date"), ex.get("exit_date"),
+            ex.get("entry_fee"), ex.get("exit_fee"),
         )
         ex["pl_dollar"], ex["roi_pct"], ex["days_held"], ex["win_loss"] = pl, roi, days, win_loss
 
         if not ex.get("exit_date"):
-            auto_pos = _portfolio_pos_pct(ex.get("entry_price"), ex.get("shares"), ex.get("currency"))
+            auto_pos = _portfolio_pos_pct(ex.get("entry_price"), ex.get("shares"),
+                                          ex.get("currency"), ex.get("entry_fee"))
             if auto_pos is not None:
                 ex["position_size_pct"] = auto_pos
 
@@ -153,14 +215,16 @@ def update(tid):
             UPDATE trades SET
                 ticker=?, company_name=?, sector=?, industry=?, strategy=?, currency=?,
                 entry_date=?, entry_price=?, shares=?, position_size_pct=?,
-                exit_date=?, exit_price=?, pl_dollar=?, roi_pct=?, days_held=?, win_loss=?,
+                exit_date=?, exit_price=?, entry_fee=?, exit_fee=?,
+                pl_dollar=?, roi_pct=?, days_held=?, win_loss=?,
                 notes=?, updated_at=?
             WHERE id = ?
         """, (
             ex["ticker"], ex["company_name"], ex["sector"], ex["industry"], ex["strategy"],
             ex.get("currency") or "USD",
             ex["entry_date"], ex["entry_price"], ex["shares"], ex["position_size_pct"],
-            ex["exit_date"], ex["exit_price"], ex["pl_dollar"], ex["roi_pct"], ex["days_held"],
+            ex["exit_date"], ex["exit_price"], ex.get("entry_fee"), ex.get("exit_fee"),
+            ex["pl_dollar"], ex["roi_pct"], ex["days_held"],
             ex["win_loss"], ex["notes"], now, tid,
         ))
         row = db.execute("SELECT * FROM trades WHERE id = ?", (tid,)).fetchone()

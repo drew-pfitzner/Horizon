@@ -37,6 +37,14 @@ export function fmtNum(n, digits = 2) {
   return Number(n).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
+// Share counts are routinely fractional (IBKR fills sub-$100 orders in slices of
+// a share), so rounding to whole numbers renders most of a position log as "0".
+// Show up to 4 decimals and trim the trailing zeros off round lots.
+export function fmtShares(n) {
+  if (n == null || n === "" || isNaN(n)) return "—";
+  return String(Number(Number(n).toFixed(4)));
+}
+
 export function fmtInt(n) {
   if (n == null || isNaN(n)) return "—";
   return Math.round(n).toLocaleString("en-US");

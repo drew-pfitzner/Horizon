@@ -15,6 +15,9 @@ DEFAULT_SETTINGS = {
     "sec_identity": "",
     "portfolio": {"value": 0, "currency": "AUD"},
     "max_position_pct": 5.0,
+    # Broker commission as a % of trade value, charged per side. IBKR's
+    # fractional-share fills come in at almost exactly 1.0%.
+    "commission_pct": 1.0,
     "fx_rates": {},
     # Alerts
     "ntfy_server": "https://ntfy.sh",
@@ -173,12 +176,25 @@ def init_db():
             )
         _add_column_if_missing(db, "alert_watch", "last_checked_bar", "TEXT")
 
+        # Commission. NULL means "derive it from commission_pct"; a stored number
+        # (including 0) is an explicit override.
+        _add_column_if_missing(db, "trades", "exit_fee", "REAL")
+        if _add_column_if_missing(db, "trades", "entry_fee", "REAL"):
+            # Trades logged before this column existed carry an entry_price taken
+            # from IBKR's average cost, which already has the buy commission baked
+            # in — deriving a fee for them would charge it twice. Only the exit
+            # side (left NULL → auto) was genuinely missing.
+            db.execute("UPDATE trades SET entry_fee = 0")
+
 
 def _add_column_if_missing(db, table, column, coltype):
-    """Idempotent ALTER for schema additions on already-created tables."""
+    """Idempotent ALTER for schema additions on already-created tables.
+    Returns True if the column was actually added."""
     cols = {r["name"] for r in db.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in cols:
         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        return True
+    return False
 
 
 @contextmanager

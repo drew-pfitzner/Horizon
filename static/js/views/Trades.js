@@ -1,4 +1,4 @@
-import { get, post, put, del, isoToday, fmtDate, fmtMoney, fmtPct, fmtNum, sortRows, toggleSortState } from "../utils.js";
+import { get, post, put, del, isoToday, fmtDate, fmtMoney, fmtPct, fmtNum, fmtShares, sortRows, toggleSortState } from "../utils.js";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -24,11 +24,13 @@ export const Trades = {
       portfolioMsg: null,
       portfolioMsgClass: "",
       maxPositionPct: 5,
+      commissionPct: 1.0,
       fxRates: {},
     };
   },
   async mounted() {
-    await Promise.all([this.loadTrades(), this.loadPerf(), this.loadPortfolio(), this.loadMax(), this.loadFx()]);
+    await Promise.all([this.loadTrades(), this.loadPerf(), this.loadPortfolio(), this.loadMax(),
+                       this.loadCommission(), this.loadFx()]);
     const q = this.$route.query;
     if (q.new === "1") {
       this.modalMode = "new";
@@ -66,10 +68,38 @@ export const Trades = {
       const baseCcy = (this.portfolio.currency || "AUD").toUpperCase();
       return this.fxRate(tradeCcy, baseCcy);
     },
-    formCostTradeCcy() {
+    formEntryNotional() {
       const p = Number(this.form.entry_price), s = Number(this.form.shares);
       if (!p || !s) return null;
       return p * s;
+    },
+    formEntryFee() {
+      if (this.formEntryNotional == null) return null;
+      return this.resolveFee(this.formEntryNotional, this.form.entry_fee);
+    },
+    formExitNotional() {
+      const p = Number(this.form.exit_price), s = Number(this.form.shares);
+      if (!p || !s) return null;
+      return p * s;
+    },
+    formExitFee() {
+      if (this.formExitNotional == null) return null;
+      return this.resolveFee(this.formExitNotional, this.form.exit_fee);
+    },
+    // What the position actually cost — commission included, matching the basis
+    // the server uses for ROI.
+    formCostTradeCcy() {
+      if (this.formEntryNotional == null) return null;
+      return this.formEntryNotional + (this.formEntryFee || 0);
+    },
+    // Net P/L preview for a closed trade, both commissions taken out.
+    formNetPl() {
+      if (this.formExitNotional == null || this.formCostTradeCcy == null) return null;
+      return (this.formExitNotional - (this.formExitFee || 0)) - this.formCostTradeCcy;
+    },
+    formNetRoi() {
+      if (this.formNetPl == null || !this.formCostTradeCcy) return null;
+      return this.formNetPl / this.formCostTradeCcy * 100;
     },
     formCostBaseCcy() {
       if (this.formCostTradeCcy == null || this.formFxRate == null) return null;
@@ -102,6 +132,7 @@ export const Trades = {
         strategy: "TRADE", currency: "USD",
         entry_date: isoToday(), entry_price: null, shares: null, position_size_pct: null,
         exit_date: null, exit_price: null,
+        entry_fee: null, exit_fee: null,   // null = derive from the commission %
         notes: "",
       };
     },
@@ -120,6 +151,19 @@ export const Trades = {
     },
     async loadMax() {
       try { this.maxPositionPct = Number(await get("/api/settings/max-position-pct")) || 5; } catch (e) { console.error(e); }
+    },
+    async loadCommission() {
+      try {
+        const c = await get("/api/settings/commission-pct");
+        if (c != null) this.commissionPct = Number(c);
+      } catch (e) { console.error(e); }
+    },
+    // Mirrors _fee() in routes/trades.py: an explicit value wins, otherwise the
+    // commission rate applies to the notional.
+    resolveFee(notional, stored) {
+      if (stored !== null && stored !== undefined && stored !== "" && !isNaN(stored)) return Number(stored);
+      if (!notional) return 0;
+      return Math.abs(notional) * this.commissionPct / 100;
     },
     async loadFx() {
       try { this.fxRates = await get("/api/settings/fx-rates") || {}; } catch (e) { console.error(e); }
@@ -149,7 +193,9 @@ export const Trades = {
       if (!this.portfolio.value || !t.entry_price || !t.shares) return null;
       const fx = this.fxRate(t.currency || "USD", this.portfolio.currency);
       if (fx == null) return null;
-      return (t.entry_price * t.shares * fx) / this.portfolio.value * 100;
+      const notional = t.entry_price * t.shares;
+      const cost = notional + this.resolveFee(notional, t.entry_fee);
+      return (cost * fx) / this.portfolio.value * 100;
     },
     posCellClass(t) {
       const pct = this.livePosPct(t);
@@ -208,7 +254,8 @@ export const Trades = {
     closeModal() { this.modalMode = null; this.message = null; },
     payload() {
       const p = { ...this.form };
-      ["entry_price", "shares", "position_size_pct", "exit_price"].forEach(k => {
+      ["entry_price", "shares", "position_size_pct", "exit_price",
+       "entry_fee", "exit_fee"].forEach(k => {
         if (p[k] === "" || p[k] == null) p[k] = null;
         else p[k] = Number(p[k]);
       });
@@ -344,7 +391,7 @@ export const Trades = {
                 <td><span class="badge">{{ t.currency || 'USD' }}</span></td>
                 <td>{{ fmtDate(t.entry_date) }}</td>
                 <td class="num">{{ fmtMoney(t.entry_price) }}</td>
-                <td class="num">{{ fmtNum(t.shares, 0) }}</td>
+                <td class="num">{{ fmtShares(t.shares) }}</td>
                 <td class="num" :class="posCellClass(t)" :title="livePosPct(t) != null && livePosPct(t) > maxPositionPct ? 'Above max ' + maxPositionPct + '%' : ''">
                   <template v-if="livePosPct(t) != null">{{ livePosPct(t).toFixed(2) }}%</template>
                   <template v-else-if="t.position_size_pct">{{ t.position_size_pct }}%</template>
@@ -495,12 +542,56 @@ export const Trades = {
               <input type="number" step="0.0001" v-model.number="form.shares">
             </div>
             <div class="field">
+              <label>Entry Fee
+                <span class="text-muted" style="font-weight: 400; font-size: .75rem;">— blank = {{ commissionPct }}%</span>
+              </label>
+              <input type="number" step="0.0001" v-model.number="form.entry_fee"
+                     :placeholder="formEntryFee != null ? formEntryFee.toFixed(4) : 'auto'"
+                     title="Buy commission in trade currency. Leave blank to derive it from the commission % in Settings; enter 0 if the entry price already includes it.">
+            </div>
+            <div class="field">
               <label>Exit Date</label>
               <input type="date" v-model="form.exit_date">
             </div>
             <div class="field">
               <label>Exit Price</label>
               <input type="number" step="0.0001" v-model.number="form.exit_price">
+            </div>
+            <div class="field">
+              <label>Exit Fee
+                <span class="text-muted" style="font-weight: 400; font-size: .75rem;">— blank = {{ commissionPct }}%</span>
+              </label>
+              <input type="number" step="0.0001" v-model.number="form.exit_fee"
+                     :placeholder="formExitFee != null ? formExitFee.toFixed(4) : 'auto'"
+                     title="Sell commission in trade currency. Leave blank to derive it from the commission % in Settings.">
+            </div>
+          </div>
+
+          <div class="position-summary" v-if="formEntryNotional != null">
+            <div class="position-summary-main">
+              <div class="position-stat" v-if="!portfolio.value">
+                <div class="stat-label">Cost incl. fee</div>
+                <div class="stat-value">{{ fmtCcy(formCostTradeCcy, (form.currency || 'USD').toUpperCase()) }}</div>
+              </div>
+              <div class="position-stat" v-if="formExitNotional != null">
+                <div class="stat-label">Net proceeds</div>
+                <div class="stat-value">
+                  {{ fmtCcy(formExitNotional - (formExitFee || 0), (form.currency || 'USD').toUpperCase()) }}
+                </div>
+                <div class="stat-note text-muted">
+                  {{ fmtCcy(formExitNotional, (form.currency || 'USD').toUpperCase()) }}
+                  − {{ fmtCcy(formExitFee, (form.currency || 'USD').toUpperCase()) }} fee
+                </div>
+              </div>
+              <div class="position-stat" v-if="formNetPl != null">
+                <div class="stat-label">Net P/L</div>
+                <div class="stat-value" :class="{ 'text-green': formNetPl > 0, 'text-red': formNetPl < 0 }">
+                  {{ fmtCcy(formNetPl, (form.currency || 'USD').toUpperCase()) }}
+                </div>
+                <div class="stat-note" :class="formNetPl > 0 ? 'text-green' : 'text-red'">
+                  {{ formNetRoi != null ? formNetRoi.toFixed(2) + '%' : '' }}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -519,6 +610,9 @@ export const Trades = {
               <div class="position-stat">
                 <div class="stat-label">Trade Cost ({{ (form.currency || 'USD').toUpperCase() }})</div>
                 <div class="stat-value">{{ fmtCcy(formCostTradeCcy, (form.currency || 'USD').toUpperCase()) }}</div>
+                <div class="stat-note text-muted" v-if="formEntryFee">
+                  incl. {{ fmtCcy(formEntryFee, (form.currency || 'USD').toUpperCase()) }} fee
+                </div>
               </div>
               <div class="position-stat" v-if="(form.currency || 'USD').toUpperCase() !== (portfolio.currency || 'AUD').toUpperCase()">
                 <div class="stat-label">Trade Cost ({{ (portfolio.currency || 'AUD').toUpperCase() }})</div>
@@ -583,5 +677,5 @@ export const Trades = {
       </div>
     </div>
   `,
-  setup() { return { fmtDate, fmtMoney, fmtPct, fmtNum }; },
+  setup() { return { fmtDate, fmtMoney, fmtPct, fmtNum, fmtShares }; },
 };

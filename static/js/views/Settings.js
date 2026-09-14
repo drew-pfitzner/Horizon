@@ -32,6 +32,10 @@ export const Settings = {
       sysMessage: null,
       sysMessageClass: "",
       maxPositionPct: 5,
+      commissionPct: 1.0,
+      savingCommission: false,
+      commissionMessage: null,
+      commissionMessageClass: "",
       savingMax: false,
       maxMessage: null,
       maxMessageClass: "",
@@ -292,7 +296,25 @@ export const Settings = {
       try {
         this.maxPositionPct = Number(await get("/api/settings/max-position-pct")) || 5;
         this.fxRates = await get("/api/settings/fx-rates") || {};
+        const c = await get("/api/settings/commission-pct");
+        if (c != null) this.commissionPct = Number(c);
       } catch (e) { console.error(e); }
+    },
+    async saveCommission() {
+      this.savingCommission = true;
+      this.commissionMessage = null;
+      try {
+        const r = await put("/api/settings/commission-pct", { value: Number(this.commissionPct) });
+        this.commissionPct = Number(r.value);
+        this.commissionMessage = `Saved · recalculated ${r.recomputed || 0} closed trades`;
+        this.commissionMessageClass = "text-green";
+      } catch (e) {
+        this.commissionMessage = `Error: ${e.message}`;
+        this.commissionMessageClass = "text-red";
+      } finally {
+        this.savingCommission = false;
+        setTimeout(() => { this.commissionMessage = null; }, 4000);
+      }
     },
     async saveMax() {
       this.savingMax = true;
@@ -615,6 +637,25 @@ export const Settings = {
             {{ savingMax ? "Saving..." : "Save" }}
           </button>
           <span :class="maxMessageClass">{{ maxMessage }}</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Brokerage Commission</h3>
+        <p class="text-muted">
+          Commission charged per side, as a percent of trade value — IBKR bills fractional-share
+          fills at almost exactly 1%. It is deducted from both the buy and the sell when P/L and
+          ROI are worked out, so a trade that only cleared the spread shows up as the loss it is.
+          Any trade can override the figure with actual dollars in its Entry/Exit Fee fields.
+          Changing this recalculates every closed trade that hasn't been overridden.
+        </p>
+        <div class="toolbar">
+          <label style="margin: 0;">Commission %</label>
+          <input type="number" step="0.05" min="0" max="10" v-model.number="commissionPct" style="width: 100px;">
+          <button class="btn-primary" :disabled="savingCommission" @click="saveCommission">
+            {{ savingCommission ? "Saving..." : "Save" }}
+          </button>
+          <span :class="commissionMessageClass">{{ commissionMessage }}</span>
         </div>
       </div>
 
