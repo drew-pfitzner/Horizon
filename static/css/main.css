@@ -729,3 +729,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .settings-fields .field { display: flex; flex-direction: column; gap: 0.25rem; }
 .settings-fields .field label { font-size: 0.82rem; color: var(--text-muted, #8b949e); }
 .settings-fields .field input { width: 100%; }
+
+/* Market Check: where a fetched indicator came from, under its threshold hint. */
+.live-source { display: block; font-size: 0.78rem; opacity: 0.75; }

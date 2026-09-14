@@ -100,22 +100,25 @@ def history():
     return jsonify({"success": True, "data": [row_to_dict(r) for r in rows]})
 
 
-@bp.route("", methods=["POST"])
-def upsert():
-    p = request.get_json(force=True)
-    today = p.get("date") or date.today().isoformat()
-    stl = p.get("st_louis_fed")
-    vix = p.get("vix")
-    rsi = p.get("rsi")
-    sto = p.get("stochastic")
-    s5fi = p.get("s5fi")
-    fg = p.get("fear_greed")
-    notes = p.get("notes", "")
+FIELDS = ("st_louis_fed", "vix", "rsi", "stochastic", "s5fi", "fear_greed")
 
+
+def upsert_values(day, values, notes=None, notes_if_new=None):
+    """Write one day's indicators, recomputing the gate. Shared by the POST
+    handler and the scheduled auto-fill, so both store identical rows.
+
+    `notes_if_new` is only applied when the day has no row yet, so an automated
+    fill never clobbers a note you typed.
+    """
+    stl, vix, rsi, sto, s5fi, fg = (values.get(k) for k in FIELDS)
     crash_risk, level, pct = compute_gate(stl, vix, rsi, sto, s5fi, fg)
     now = datetime.now().isoformat(timespec="seconds")
 
     with get_db() as db:
+        if notes is None:
+            existing = db.execute(
+                "SELECT notes FROM market_check WHERE date = ?", (day,)).fetchone()
+            notes = (existing["notes"] if existing else None) or (notes_if_new or "")
         db.execute("""
             INSERT INTO market_check
                 (date, st_louis_fed, vix, rsi, stochastic, s5fi, fear_greed,
@@ -133,10 +136,17 @@ def upsert():
                 position_size_pct=excluded.position_size_pct,
                 notes=excluded.notes,
                 updated_at=excluded.updated_at
-        """, (today, stl, vix, rsi, sto, s5fi, fg, crash_risk, level, pct, notes, now))
-        row = db.execute("SELECT * FROM market_check WHERE date = ?", (today,)).fetchone()
+        """, (day, stl, vix, rsi, sto, s5fi, fg, crash_risk, level, pct, notes, now))
+        row = db.execute("SELECT * FROM market_check WHERE date = ?", (day,)).fetchone()
+    return row_to_dict(row)
 
-    return jsonify({"success": True, "data": row_to_dict(row)})
+
+@bp.route("", methods=["POST"])
+def upsert():
+    p = request.get_json(force=True)
+    day = p.get("date") or date.today().isoformat()
+    data = upsert_values(day, p, notes=p.get("notes", ""))
+    return jsonify({"success": True, "data": data})
 
 
 @bp.route("/preview", methods=["POST"])

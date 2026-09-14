@@ -19,6 +19,11 @@ export const MarketCheck = {
       history: [],
       pendingDelete: null,
       historySort: { key: "date", dir: "desc" },
+      fetching: false,
+      live: null,          // per-field {value, source, as_of, error} from the last fetch
+      liveError: null,
+      s5fiStatus: null,    // 'computing' while the background rebuild runs
+      s5fiProgress: null,
       portfolio: { value: 0, currency: "AUD" },
       fxRates: {},
     };
@@ -119,6 +124,75 @@ export const MarketCheck = {
         setTimeout(() => { this.message = null; }, 3000);
       }
     },
+    // Pull all six indicators from their public sources. RSI/Stochastic are
+    // computed from S&P 500 bars by the same engine the alerts use, so they
+    // match the TradingView panes; S5FI is rebuilt from the constituents and
+    // takes a minute, so a stale one is refreshed in the background.
+    async fetchLive() {
+      this.fetching = true;
+      this.liveError = null;
+      try {
+        const snap = await get("/api/market-data/snapshot");
+        this.applyLive(snap);
+        if (!snap.s5fi || snap.s5fi.stale) await this.refreshS5fi();
+      } catch (e) {
+        this.liveError = e.message;
+      } finally {
+        this.fetching = false;
+      }
+    },
+    applyLive(snap) {
+      this.live = snap;
+      ["st_louis_fed", "vix", "rsi", "stochastic", "s5fi", "fear_greed"].forEach(k => {
+        const f = snap[k];
+        if (f && f.value != null) this.form[k] = f.value;
+      });
+    },
+    async refreshS5fi() {
+      this.s5fiStatus = "computing";
+      try {
+        await post("/api/market-data/s5fi/refresh", {});
+      } catch (e) {
+        // 409 just means a rebuild is already in flight — poll that one.
+        if (!/already computing/i.test(e.message)) {
+          this.s5fiStatus = null;
+          this.liveError = e.message;
+          return;
+        }
+      }
+      this.pollS5fi();
+    },
+    async pollS5fi() {
+      try {
+        const st = await get("/api/market-data/s5fi/status");
+        if (st.status === "running") {
+          this.s5fiProgress = st.output.length ? st.output[st.output.length - 1] : null;
+          setTimeout(() => this.pollS5fi(), 4000);
+          return;
+        }
+        this.s5fiStatus = null;
+        this.s5fiProgress = null;
+        if (st.status === "error") {
+          this.liveError = `S5FI: ${st.error}`;
+        } else if (st.result && st.result.value != null) {
+          this.form.s5fi = st.result.value;
+          if (this.live) this.live.s5fi = { ...st.result, source: "computed" };
+        }
+      } catch (e) {
+        this.s5fiStatus = null;
+        this.liveError = e.message;
+      }
+    },
+    liveInfo(key) {
+      const f = this.live && this.live[key];
+      if (!f) return null;
+      if (f.error) return f.error;
+      const bits = [f.source];
+      if (f.as_of) bits.push(fmtDate(f.as_of));
+      if (key === "stochastic" && f.k != null) bits.push(`%K ${f.k}`);
+      if (key === "fear_greed" && f.rating) bits.push(f.rating);
+      return bits.join(" · ");
+    },
     async loadHistory() {
       try {
         this.history = await get("/api/market-check/history?limit=14");
@@ -214,6 +288,16 @@ export const MarketCheck = {
         </div>
       </div>
 
+      <div class="toolbar">
+        <button :disabled="fetching" @click="fetchLive">
+          {{ fetching ? "Fetching..." : "Fetch live data" }}
+        </button>
+        <span v-if="s5fiStatus === 'computing'" class="text-muted">
+          Rebuilding S5FI from the 500 constituents (a minute or two)<template v-if="s5fiProgress"> — {{ s5fiProgress }}</template>
+        </span>
+        <span v-if="liveError" class="text-red">{{ liveError }}</span>
+      </div>
+
       <div class="grid-2">
         <div class="card">
           <h3>Crash / Recession</h3>
@@ -224,6 +308,7 @@ export const MarketCheck = {
               <input type="number" step="0.0001" v-model.number="form.st_louis_fed">
             </div>
             <small class="text-muted">≤ -1 green · &lt; 0 blue · &lt; 1 orange · ≥ 1 red</small>
+            <small v-if="liveInfo('st_louis_fed')" class="text-muted live-source">{{ liveInfo('st_louis_fed') }}</small>
           </div>
           <div class="field">
             <label>VIX</label>
@@ -232,6 +317,7 @@ export const MarketCheck = {
               <input type="number" step="0.01" v-model.number="form.vix">
             </div>
             <small class="text-muted">≤ 25 green · &lt; 30 orange · ≥ 30 red</small>
+            <small v-if="liveInfo('vix')" class="text-muted live-source">{{ liveInfo('vix') }}</small>
           </div>
           <div v-if="preview" class="field">
             <label>Market Risk</label>
@@ -248,6 +334,7 @@ export const MarketCheck = {
               <input type="number" step="0.01" v-model.number="form.rsi">
             </div>
             <small class="text-muted">≤ 30 LOW · &lt; 60 MED · ≥ 60 HIGH</small>
+            <small v-if="liveInfo('rsi')" class="text-muted live-source">{{ liveInfo('rsi') }}</small>
           </div>
           <div class="field">
             <label>Stochastic</label>
@@ -256,6 +343,7 @@ export const MarketCheck = {
               <input type="number" step="0.01" v-model.number="form.stochastic">
             </div>
             <small class="text-muted">≤ 20 LOW · &lt; 80 MED · ≥ 80 HIGH</small>
+            <small v-if="liveInfo('stochastic')" class="text-muted live-source">{{ liveInfo('stochastic') }}</small>
           </div>
           <div class="field">
             <label>S&P 500 % Above 50DMA (S5FI)</label>
@@ -264,6 +352,7 @@ export const MarketCheck = {
               <input type="number" step="0.01" v-model.number="form.s5fi">
             </div>
             <small class="text-muted">≤ 40 LOW · &lt; 70 MED · ≥ 70 HIGH</small>
+            <small v-if="liveInfo('s5fi')" class="text-muted live-source">{{ liveInfo('s5fi') }}</small>
           </div>
           <div class="field">
             <label>Fear &amp; Greed</label>
@@ -272,6 +361,7 @@ export const MarketCheck = {
               <input type="number" step="0.01" v-model.number="form.fear_greed">
             </div>
             <small class="text-muted">≤ 45 LOW · &lt; 55 MED · ≥ 55 HIGH</small>
+            <small v-if="liveInfo('fear_greed')" class="text-muted live-source">{{ liveInfo('fear_greed') }}</small>
           </div>
         </div>
       </div>

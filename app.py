@@ -13,6 +13,7 @@ from routes.system import bp as system_bp
 from routes.company import bp as company_bp
 from routes.prefill import bp as prefill_bp
 from routes.alerts import bp as alerts_bp
+from routes.market_data import bp as market_data_bp
 
 
 def create_app():
@@ -28,6 +29,7 @@ def create_app():
     app.register_blueprint(company_bp, url_prefix="/api/company")
     app.register_blueprint(prefill_bp, url_prefix="/api/prefill")
     app.register_blueprint(alerts_bp, url_prefix="/api/alerts")
+    app.register_blueprint(market_data_bp, url_prefix="/api/market-data")
 
     @app.route("/")
     @app.route("/<path:path>")
@@ -41,10 +43,14 @@ if __name__ == "__main__":
     init_db()
     app = create_app()
     debug = os.getenv("FLASK_DEBUG", "1") == "1"
-    # Start the alert scheduler once. Under the dev reloader Flask spawns two
+    # Start the background schedulers once. Under the dev reloader Flask spawns two
     # processes; only the reloaded child (WERKZEUG_RUN_MAIN=true) should run the
-    # thread. In Docker (FLASK_DEBUG=0, no reloader) this guard is a no-op.
+    # threads. In Docker (FLASK_DEBUG=0, no reloader) this guard is a no-op.
     if not debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         import alert_job
+        import sm_job
+        import market_data_job
         alert_job.start_scheduler()
+        sm_job.start_scheduler()            # weekly 13F refresh
+        market_data_job.start_scheduler()   # daily market-check auto-fill
     app.run(host="0.0.0.0", port=PORT, debug=debug, use_reloader=debug)

@@ -33,7 +33,7 @@ cd Horizon
 
 ## Your Workflow
 
-1. **Market Check** (daily) — Input 6 indicators (Fed, VIX, RSI, Stochastic, S5FI, Fear/Greed) → outputs CAN TRADE? + position size %
+1. **Market Check** (daily) — 6 indicators (Fed, VIX, RSI, Stochastic, S5FI, Fear/Greed) → outputs CAN TRADE? + position size %. **Fetch live data** fills all six from public sources; optional auto-fill does it on a schedule (see *Live market data*).
 2. **Research** (as needed) — Checklist (fundamentals + technicals) → Valuation → Smart money lookup → Decision (TRADE/INVEST/NO ACTION)
 3. **Trades** (when it happens) — Log entries/exits → System auto-calculates ROI, win/loss, performance
 4. **Smart Money** (reference) — Search by ticker (who holds it, %) or guru (full portfolio)
@@ -57,7 +57,8 @@ cd Horizon
 - `/api/market-check` — Daily market gate input/output
 - `/api/research` — Research checklist, valuation, smart money lookups
 - `/api/trades` — Trade logging, performance tracking
-- `/api/smart-money` — Guru + ticker search (queries smart_money.db)
+- `/api/smart-money` — Guru + ticker search (queries smart_money.db), 13F update + weekly schedule
+- `/api/market-data` — Live indicator snapshot, S5FI rebuild, market-check auto-fill schedule
 - `/api/valuation` — Equity multiple calculator (inputs: 5yr ROE, payout ratio, equity, shares; outputs: valuation + discount %)
 
 **Components** (Vue.js in `static/js/views/`)
@@ -73,7 +74,8 @@ cd Horizon
 ## Key Features
 
 ### Market Check
-- Input 6 indicators once per day → get YES/NO to trade + position size %
+- 6 indicators once per day → get YES/NO to trade + position size %
+- **Fetch live data** button fills all six; or turn on the daily auto-fill in Settings
 - Persists for the day; update if changed
 - Notes field for context
 
@@ -104,7 +106,7 @@ cd Horizon
 
 - **Research is async** — research stocks anytime; only *trade* when market gate = YES
 - **Smart money is validation, not a gate** — can trade stocks with no guru holdings
-- **No external APIs** — everything local (smart_money.db, your data)
+- **No external APIs** — no keys, no accounts, no paid feeds. The indicator fetch uses only public endpoints (FRED, Yahoo, CNN); everything else is local.
 - **Tailscale for privacy** — no public internet exposure
 
 ---
@@ -142,6 +144,7 @@ docker compose down             # Stop
 - **Data paths:** All DB/config paths accept env vars (`HORIZON_DB_PATH`, `SMART_MONEY_DB_PATH`, `SMART_MONEY_DIR`) for flexibility between dev/Docker
 - **Docker context:** Build context is `Horizon/` itself; single `requirements.txt` installs both Horizon and smart_money deps
 - **Flask debug:** Set `FLASK_DEBUG=0` in Docker so auto-reloader doesn't kill background threads; defaults to `1` (true) locally
+- **Schedulers:** three daemon threads, all started in `app.py` behind the `WERKZEUG_RUN_MAIN` guard so the dev reloader doesn't double them — `alert_job` (daily signal check), `sm_job` (weekly 13F update), `market_data_job` (daily market-check fill). Each wakes at most hourly so a settings change lands without waiting out the full interval, and each catches up on boot if the box was off through its slot
 - **Alerts dedupe:** each watch carries a `last_checked_bar` watermark; a ticker with a NULL watermark is *armed* at the current bar and fires nothing (no stale back-fill). Removing a watch is therefore a **soft delete** (`active = 0`) — a hard delete dropped the watermark, so remove/re-add re-armed the ticker and swallowed the signal in progress. Re-adding revives the same row.
 - **Alerts "Signal now"** (`GET /api/alerts/now` → `alert_job.current_state()`): read-only snapshot of every active watch at the latest closed bar, ignoring the watermark and sending nothing. Reports the edge on that bar plus the most recent signal in the 2y window, tagged `sent` / `missed` (watermark was already past it) / `pending`. Use it when an expected alert never arrived — a normal check can't tell you, since an armed or already-fired ticker is silent by design. Network-bound (parallel price fetches), so it's an explicit button, not on mount.
 
@@ -151,6 +154,64 @@ docker compose down             # Stop
 - Valuation formula: Equity Multiplier = (r/req)² + (d/req)×(1+r/req) where r=reinvested%, d=distributed%, req=required_return%
 - Payout inputs: Accept percentages (27, not 0.27); frontend converts ÷100 before API
 - MOS: Applies 10% discount to ROE only; payout stays at median
+
+## Live market data (`market_data.py`)
+
+Fetches all six Market Check indicators, so none of them have to be copied off a
+screen. Free public endpoints only — no API keys, no accounts.
+
+| Indicator | Source | Notes |
+|---|---|---|
+| St. Louis Fed (STLFSI4) | FRED CSV download | weekly series, so the latest value is normally Friday-dated and a few days old |
+| VIX | Yahoo `^VIX` | last *completed* daily bar |
+| RSI | computed from `^GSPC` | `signals.compute_indicators`, same engine as the alerts |
+| Stochastic | computed from `^GSPC` | reports **%D** (the line the gate thresholds describe); %K rides along in the response |
+| S5FI | computed from the 500 constituents | see below |
+| Fear & Greed | CNN `production.dataviz.cnn.io` | needs browser-ish headers (UA + `Referer`/`Origin`), else CNN answers "I'm a teapot. You're a bot." |
+
+**RSI / Stochastic are computed, not scraped.** `signals.py` is already a faithful
+port of the TradingView indicators, so feeding it `^GSPC` bars reproduces the chart's
+Data Window exactly — verified against a live chart: close 7656.98, RSI 50.00,
+%K 40.18, %D 20.65, all matching to 2dp.
+
+**S5FI is rebuilt from the index.** TradingView's `INDEX:S5FI` is licensed and has no
+free feed, so we recompute it: S&P 500 constituent list from Wikipedia (cached a week,
+falls back to the last good cache if the markup changes), then 6 months of daily closes
+per member via Yahoo's multi-symbol `spark` endpoint, counting how many closed above
+their own 50-day SMA. Verified at 38.77 against TradingView's 38.76 on the same bar —
+the 0.01 is the 503-listed-tickers vs 500-index-members difference.
+
+Constraints learned the hard way:
+- `spark` accepts at most **20 symbols per call** — 25+ returns HTTP 400.
+- Firing the ~26 batches back-to-back trips a Yahoo **429 cooldown** that then blocks
+  *every* Yahoo endpoint for a couple of minutes. `SPARK_PAUSE` (1.5s) plus the
+  escalating retry backoff keeps it under the limit. A full rebuild takes ~1–2 minutes.
+- Because it's slow, S5FI never runs inline in a request: `market_data.snapshot()`
+  returns the cached value with a `stale` flag, and `market_data_job` recomputes it in
+  a background thread (`POST /api/market-data/s5fi/refresh`, poll `/s5fi/status`).
+- FRED times out serving the full series; the fetch asks for a 180-day window.
+
+**Auto-fill** (`market_data_job.auto_fill`): fetches all six and upserts the day's
+`market_check` row via the shared `routes.market_check.upsert_values`, so scheduled
+and hand-entered rows are identical. It refuses to save a partial set (any indicator
+that failed → nothing written, the reason is in the job log), and `notes_if_new`
+means an automated fill never overwrites a note you typed. Off by default; enable
+with a time in Settings → Market Check Auto-Fill. Rows are dated by the **US market
+date** at run time, matching the session the numbers describe.
+
+## Smart Money weekly auto-update (`sm_job.start_scheduler`)
+
+Runs the same `cli.py update` the button runs, once a week (default Sunday 07:00 ET),
+configurable in Settings → Smart Money Auto-Update. Weekly is the right cadence: 13Fs
+land in bursts around the 45-day post-quarter deadline, so most runs are no-ops and
+nothing is ever more than a week stale.
+
+- **Boot catch-up:** if the slot passed while the machine was off, the run happens at
+  next startup (`_due()` compares `sm_last_auto_run` against the most recently passed slot).
+- **Switching it on stamps a baseline** rather than firing immediately — with no
+  recorded run, every past slot would look "missed" and enabling it would kick off a
+  full SEC pull on the next restart. The manual button is there for an immediate run.
+- A scheduled run that collides with a manual one simply skips; next week catches it.
 
 ## Terminal research script (`research_cli.py`)
 

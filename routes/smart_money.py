@@ -18,6 +18,44 @@ def update_status():
     return jsonify({"success": True, "data": sm_job.get_state()})
 
 
+@bp.route("/schedule", methods=["GET"])
+def get_schedule():
+    return jsonify({"success": True, "data": sm_job.schedule_info()})
+
+
+@bp.route("/schedule", methods=["PUT"])
+def put_schedule():
+    from db import get_setting, set_setting
+    p = request.get_json(force=True)
+    if "enabled" in p:
+        was_on = bool(get_setting("sm_auto_enabled", False))
+        now_on = bool(p["enabled"])
+        set_setting("sm_auto_enabled", now_on)
+        # Switching it on shouldn't mean "run a full SEC update right now": the
+        # boot catch-up exists for *missed* slots, and with no recorded run every
+        # slot looks missed. Stamp a baseline so the first run is the next slot;
+        # the Smart Money tab's button is there for an immediate one.
+        if now_on and not was_on and not get_setting("sm_last_auto_run", None):
+            set_setting("sm_last_auto_run", sm_job._local_now().isoformat(timespec="seconds"))
+    if "day" in p:
+        try:
+            day = int(p["day"])
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "day must be 0 (Mon) - 6 (Sun)"}), 400
+        if not 0 <= day <= 6:
+            return jsonify({"success": False, "error": "day must be 0 (Mon) - 6 (Sun)"}), 400
+        set_setting("sm_update_day", day)
+    if "time" in p:
+        t = (p.get("time") or "").strip()
+        try:
+            hh, mm = (int(x) for x in t.split(":"))
+            assert 0 <= hh <= 23 and 0 <= mm <= 59
+        except (ValueError, AttributeError, AssertionError):
+            return jsonify({"success": False, "error": "time must be HH:MM"}), 400
+        set_setting("sm_update_time", t)
+    return jsonify({"success": True, "data": sm_job.schedule_info()})
+
+
 def _classify(curr_shares, prev_shares, curr_weight, prev_weight):
     if prev_shares is None:
         return "New", None

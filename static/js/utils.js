@@ -55,6 +55,15 @@ export function fmtDate(s) {
   return s.split("T")[0];
 }
 
+// Date + HH:MM from an ISO timestamp, for "next run" / "last ran" captions.
+// Seconds and any timezone suffix are noise at that granularity.
+export function fmtDateTime(s) {
+  if (!s) return "—";
+  const [day, rest] = s.split("T");
+  if (!rest) return day;
+  return `${day} ${rest.slice(0, 5)}`;
+}
+
 // Whole days between a YYYY-MM-DD (or ISO) date and today (local midnight).
 // Returns null if unparseable. Positive = in the past.
 export function daysSince(s) {

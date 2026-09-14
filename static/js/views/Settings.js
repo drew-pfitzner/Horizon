@@ -1,4 +1,4 @@
-import { get, put, post, api } from "../utils.js";
+import { get, put, post, api, fmtDateTime } from "../utils.js";
 
 const INDICATORS = [
   { key: "rsi",        label: "RSI",                hint: "≤ low = LOW position size · &lt; mid = MED · ≥ mid = HIGH" },
@@ -50,6 +50,15 @@ export const Settings = {
       testingNtfy: false,
       ntfyMessage: null,
       ntfyMessageClass: "",
+      smSchedule: { enabled: false, day: 6, time: "07:00", day_name: "Sunday", next_run: null, last_auto_run: null },
+      savingSmSchedule: false,
+      smScheduleMessage: null,
+      smScheduleMessageClass: "",
+      weekdays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+      mcAuto: { enabled: false, time: "16:40", last_run: null },
+      savingMcAuto: false,
+      mcAutoMessage: null,
+      mcAutoMessageClass: "",
     };
   },
   async mounted() {
@@ -58,6 +67,7 @@ export const Settings = {
     await this.loadAccess();
     await this.loadMaxAndFx();
     await this.loadNtfy();
+    await this.loadSchedules();
   },
   methods: {
     async loadAccess() {
@@ -380,6 +390,53 @@ export const Settings = {
         setTimeout(() => { this.fxMessage = null; }, 3000);
       }
     },
+    async loadSchedules() {
+      try {
+        const [sm, mc] = await Promise.all([
+          get("/api/smart-money/schedule"),
+          get("/api/market-data/auto"),
+        ]);
+        this.smSchedule = sm;
+        this.mcAuto = mc;
+      } catch (e) { console.error(e); }
+    },
+    async saveSmSchedule() {
+      this.savingSmSchedule = true;
+      this.smScheduleMessage = null;
+      try {
+        this.smSchedule = await put("/api/smart-money/schedule", {
+          enabled: this.smSchedule.enabled,
+          day: Number(this.smSchedule.day),
+          time: this.smSchedule.time,
+        });
+        this.smScheduleMessage = "Saved";
+        this.smScheduleMessageClass = "text-green";
+      } catch (e) {
+        this.smScheduleMessage = `Error: ${e.message}`;
+        this.smScheduleMessageClass = "text-red";
+      } finally {
+        this.savingSmSchedule = false;
+        setTimeout(() => { this.smScheduleMessage = null; }, 3000);
+      }
+    },
+    async saveMcAuto() {
+      this.savingMcAuto = true;
+      this.mcAutoMessage = null;
+      try {
+        this.mcAuto = await put("/api/market-data/auto", {
+          enabled: this.mcAuto.enabled,
+          time: this.mcAuto.time,
+        });
+        this.mcAutoMessage = "Saved";
+        this.mcAutoMessageClass = "text-green";
+      } catch (e) {
+        this.mcAutoMessage = `Error: ${e.message}`;
+        this.mcAutoMessageClass = "text-red";
+      } finally {
+        this.savingMcAuto = false;
+        setTimeout(() => { this.mcAutoMessage = null; }, 3000);
+      }
+    },
     async loadNtfy() {
       try {
         const s = await get("/api/alerts/settings");
@@ -574,6 +631,66 @@ export const Settings = {
       </div>
 
       <div class="card">
+        <h3>Smart Money Auto-Update</h3>
+        <p class="text-muted">
+          Runs the same SEC 13F update as the button on the Smart Money tab, once a week.
+          Gurus file in bursts around the 45-day deadline after each quarter ends, so weekly
+          is as often as there is anything new to find. If the machine is off at the scheduled
+          time, the run happens when Horizon next starts.
+        </p>
+        <div class="settings-fields">
+          <div class="field">
+            <label>Day</label>
+            <select v-model.number="smSchedule.day">
+              <option v-for="(d, i) in weekdays" :key="i" :value="i">{{ d }}</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Time (US/Eastern)</label>
+            <input type="text" v-model="smSchedule.time" placeholder="07:00" style="max-width: 8rem;">
+          </div>
+        </div>
+        <label class="check-inline">
+          <input type="checkbox" v-model="smSchedule.enabled"> Weekly auto-update enabled
+        </label>
+        <p class="text-muted" v-if="smSchedule.enabled">
+          Next run {{ fmtDateTime(smSchedule.next_run) }}<template v-if="smSchedule.last_auto_run"> · last ran {{ fmtDateTime(smSchedule.last_auto_run) }}</template>
+        </p>
+        <div class="toolbar">
+          <button class="btn-primary" :disabled="savingSmSchedule" @click="saveSmSchedule">
+            {{ savingSmSchedule ? "Saving…" : "Save" }}
+          </button>
+          <span :class="smScheduleMessageClass">{{ smScheduleMessage }}</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Market Check Auto-Fill</h3>
+        <p class="text-muted">
+          Fetches all six indicators after the US close and saves the day's market check, so the
+          gate is already computed when you open the app. Sources: FRED (St. Louis Fed), Yahoo (VIX),
+          CNN (Fear &amp; Greed), and RSI / Stochastic / S5FI computed from S&amp;P 500 price data —
+          nothing is read off TradingView. You can still fetch on demand from the Market Check tab.
+        </p>
+        <div class="settings-fields">
+          <div class="field">
+            <label>Time (US/Eastern)</label>
+            <input type="text" v-model="mcAuto.time" placeholder="16:40" style="max-width: 8rem;">
+          </div>
+        </div>
+        <label class="check-inline">
+          <input type="checkbox" v-model="mcAuto.enabled"> Daily auto-fill enabled
+        </label>
+        <p class="text-muted" v-if="mcAuto.last_run">Last ran {{ fmtDateTime(mcAuto.last_run) }}</p>
+        <div class="toolbar">
+          <button class="btn-primary" :disabled="savingMcAuto" @click="saveMcAuto">
+            {{ savingMcAuto ? "Saving…" : "Save" }}
+          </button>
+          <span :class="mcAutoMessageClass">{{ mcAutoMessage }}</span>
+        </div>
+      </div>
+
+      <div class="card">
         <h3>SEC Identity (Smart Money Updates)</h3>
         <p class="text-muted">
           Provide your email address for SEC Edgar access. This is required to update the smart money guru holdings database.
@@ -730,4 +847,5 @@ export const Settings = {
       </div>
     </div>
   `,
+  setup() { return { fmtDateTime }; },
 };

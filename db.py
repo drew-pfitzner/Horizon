@@ -27,6 +27,18 @@ DEFAULT_SETTINGS = {
     # Signal thresholds — mirror the TradingView "Horizon Signal" inputs so alerts
     # match the chart.
     "alert_signal": dict(SIGNAL_DEFAULTS),
+    # Smart money: weekly 13F refresh. day is 0=Mon … 6=Sun, time is US/Eastern.
+    "sm_auto_enabled": False,
+    "sm_update_day": 6,
+    "sm_update_time": "07:00",
+    "sm_last_auto_run": None,
+    # Market Check: daily auto-fill from live sources (US/Eastern, after the close).
+    "mc_auto_enabled": False,
+    "mc_auto_time": "16:40",
+    "mc_auto_last_run": None,
+    # Caches for the live indicator feed (see market_data.py).
+    "s5fi_cache": {},
+    "sp500_constituents": {},
 }
 
 
