@@ -57,6 +57,7 @@ cd Horizon
 - `/api/market-check` — Daily market gate input/output
 - `/api/research` — Research checklist, valuation, smart money lookups
 - `/api/trades` — Trade logging, performance tracking
+- `/api/trades/import` — CSV preview/apply for the broker import
 - `/api/smart-money` — Guru + ticker search (queries smart_money.db), 13F update + weekly schedule
 - `/api/market-data` — Live indicator snapshot, S5FI rebuild, market-check auto-fill schedule
 - `/api/valuation` — Equity multiple calculator (inputs: 5yr ROE, payout ratio, equity, shares; outputs: valuation + discount %)
@@ -66,7 +67,8 @@ cd Horizon
 - Each has forms + real-time preview; results stored to horizon.db
 
 **Database** (`db.py`)
-- Schema: market_check, researched_stocks, valuations, trades
+- Schema: market_check, researched_stocks, valuations, trades, trade_fills (the
+  broker-fill ledger the CSV import derives positions from), trade_imports
 - All via SQLite; no external dependencies
 
 ---
@@ -93,6 +95,8 @@ cd Horizon
 - Log entry (ticker, date, price, shares)
 - Log exit → auto-calculates ROI, P&L, win/loss
 - View historical trades + monthly performance
+- **Import** tab: paste an IBKR CSV and the log updates itself (see *Importing
+  from the broker* below)
 
 ### Smart Money
 - Search by ticker → see all gurus holding, weights, QoQ changes
@@ -154,6 +158,87 @@ docker compose down             # Stop
 - Valuation formula: Equity Multiplier = (r/req)² + (d/req)×(1+r/req) where r=reinvested%, d=distributed%, req=required_return%
 - Payout inputs: Accept percentages (27, not 0.27); frontend converts ÷100 before API
 - MOS: Applies 10% discount to ROE only; payout stays at median
+
+## Importing from the broker (`ibkr_import.py`, `routes/trade_import.py`)
+
+Trades → **Import**: paste an IBKR CSV, look at what it would change, apply it.
+Nothing is written until you press Apply, and every row is shown with its
+before → after before you do.
+
+**The shape problem.** `trades` is one row per *position* — a single entry price,
+a single share count, one optional exit. IBKR's CSV is one row per *fill*: a $100
+DECK order comes back as two lines at different prices, and a position you scale
+into over three weeks is six lines. So rows can't map to rows.
+
+**The fix is a fills ledger.** `trade_fills` records every fill the importer has
+ever seen, fingerprinted and linked to its trade row. A position row is then
+*derived* from its fills — weighted-average entry, summed commission,
+weighted-average exit — and re-derived from scratch whenever new fills land.
+That gives:
+
+- **Idempotence.** A fill whose fingerprint is already in the ledger contributes
+  nothing. Re-pasting last month's file is a no-op; pasting a 1-month file and
+  then an all-time file only moves what's genuinely new.
+- **Order independence.** Derivation is sums and weighted averages over the
+  *union* of ledger and file, so importing an older window after a newer one
+  lands on the same numbers as the other order.
+- **Scale-ins and sell-outs.** Adding to a live position is just more buy fills
+  (entry price becomes the weighted average); selling out flattens it and closes
+  the row.
+
+**The fingerprint** is the broker's own `TransactionID`/`TradeID` when the file
+has one, otherwise `ticker|date|side|qty|price` plus an occurrence counter so two
+identical fills in one order stay distinct. A Flex Query is therefore the most
+reliable input — see below.
+
+**Hand-logged rows are folded in, not duplicated.** A row with no fills of its
+own gets a synthetic *baseline* fill built from what it already says, so a CSV
+holding only the sell can close a position you typed in by hand. If the file
+plainly contains the fills that row was typed from (same quantity, same date),
+the baseline is dropped and the row is *adopted* instead — corrected in place with
+the broker's real price and commission rather than logged twice.
+
+**What it ignores**: forex legs, dividends, adjustments, withholding, anything
+that isn't a Buy or a Sell. Dividends are surfaced as a notice, since one on a
+ticker with no position on file usually means you hold it outside Horizon.
+
+**Commission** comes from the CSV per fill, so imported trades carry IBKR's
+actual charge rather than the `commission_pct` estimate the hand-entry form
+falls back to.
+
+**It asks rather than guesses.** Three cases stop for a decision and block Apply
+until answered:
+
+| Question | When | Choices |
+|---|---|---|
+| `orphan_sell` | a sale whose buy predates the file, with no matching open position | supply the entry date + price, or leave it out |
+| `oversold` | more sold than the window shows bought | log what's there, or skip and paste a longer file |
+| `partial_exit` | sold down but not out | **split** (a closed row for the shares sold, keeping the realised P/L, plus an open row for the rest — entry commission apportioned) or **reduce** (one smaller open row, realised P/L not logged) |
+
+A "leave it out" answer is recorded in the ledger under `source='ignored'`, so the
+same sale doesn't raise the same question every month.
+
+**Which report to export.** The Transaction History report works and is what the
+feature was built against. A **Trades Flex Query** (Performance & Reports → Flex
+Queries → Activity, CSV) is better and also supported: it carries `TradeID`,
+which makes the dedupe exact rather than fingerprint-based, plus
+`openCloseIndicator` and `fifoPnlRealized`. Add the **Open Positions** section and
+a wide date range ("Last 365 days") and most of the ambiguity above disappears,
+because the file itself says what you were holding before the window opened.
+Activity Statement exports parse too — the parser matches columns by alias, not
+position, so the three layouts all land in the same place.
+
+**If an import gets a position wrong**, delete the row in the trade log and paste
+the file again. Deleting cascades the row's fills out of the ledger, so the next
+import sees them as new and rebuilds the position from scratch. Editing a row by
+hand also works, but the next CSV that touches that position will re-derive the
+columns the importer owns (entry/exit dates, prices, share count, fees) — notes,
+strategy and sector are never overwritten.
+
+**Tests**: `venv/bin/python -m unittest discover -s tests -t .` — 19 cases
+covering re-imports, overlapping windows, both import orders, scale-ins,
+sell-outs, partial exits in both shapes, adoption of hand-logged rows,
+delete-and-rebuild, and each question.
 
 ## Live market data (`market_data.py`)
 

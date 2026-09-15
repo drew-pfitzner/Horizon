@@ -140,6 +140,41 @@ def init_db():
                 updated_at TEXT
             );
 
+            -- Every broker fill the CSV importer has ever seen. A `trades` row
+            -- is derived from the fills that point at it, which is what makes
+            -- re-importing an overlapping statement a no-op: a fill whose
+            -- fill_key is already here contributes nothing. See ibkr_import.py.
+            CREATE TABLE IF NOT EXISTS trade_fills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER REFERENCES trades(id) ON DELETE CASCADE,
+                fill_key TEXT NOT NULL UNIQUE,   -- broker txn id, else a fingerprint
+                position_key TEXT,               -- 'TICKER|first-buy-date'
+                ticker TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                side TEXT NOT NULL,              -- BUY | SELL
+                qty REAL NOT NULL,
+                price REAL NOT NULL,
+                commission REAL,
+                currency TEXT,
+                description TEXT,
+                source TEXT,                     -- ibkr | manual | resolved
+                imported_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_trade_fills_ticker ON trade_fills(ticker);
+            CREATE INDEX IF NOT EXISTS idx_trade_fills_trade ON trade_fills(trade_id);
+
+            CREATE TABLE IF NOT EXISTS trade_imports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                imported_at TEXT,
+                account TEXT,
+                period_start TEXT,
+                period_end TEXT,
+                fills_new INTEGER,
+                trades_created INTEGER,
+                trades_updated INTEGER,
+                note TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -197,6 +232,10 @@ def init_db():
             # in — deriving a fee for them would charge it twice. Only the exit
             # side (left NULL → auto) was genuinely missing.
             db.execute("UPDATE trades SET entry_fee = 0")
+
+        # Which imported position a row belongs to. NULL = logged by hand; the
+        # importer adopts such a row rather than duplicating it.
+        _add_column_if_missing(db, "trades", "import_key", "TEXT")
 
 
 def _add_column_if_missing(db, table, column, coltype):

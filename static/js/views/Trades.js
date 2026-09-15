@@ -1,8 +1,10 @@
 import { get, post, put, del, isoToday, fmtDate, fmtMoney, fmtPct, fmtNum, fmtShares, sortRows, toggleSortState } from "../utils.js";
+import { TradeImport } from "./TradeImport.js";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 export const Trades = {
+  components: { TradeImport },
   data() {
     return {
       tab: "log",
@@ -32,6 +34,7 @@ export const Trades = {
     await Promise.all([this.loadTrades(), this.loadPerf(), this.loadPortfolio(), this.loadMax(),
                        this.loadCommission(), this.loadFx()]);
     const q = this.$route.query;
+    if (q.tab === "import" || q.tab === "perf") this.tab = q.tab;
     if (q.new === "1") {
       this.modalMode = "new";
       this.form = {
@@ -235,6 +238,11 @@ export const Trades = {
         this.savingPortfolio = false;
       }
     },
+    // An import rewrites rows underneath the log and the monthly figures, so
+    // both are reloaded rather than patched.
+    async onImported() {
+      await Promise.all([this.loadTrades(), this.loadPerf(), this.loadFx()]);
+    },
     sortLog(col) { toggleSortState(this.logSort, col); },
     sortPerf(col) { toggleSortState(this.perfSort, col); },
     openNew() { this.modalMode = "new"; this.form = this._emptyTrade(); },
@@ -359,7 +367,10 @@ export const Trades = {
       <div class="subtabs">
         <button :class="{ active: tab === 'log' }" @click="tab = 'log'">Trade Log</button>
         <button :class="{ active: tab === 'perf' }" @click="tab = 'perf'">Performance</button>
+        <button :class="{ active: tab === 'import' }" @click="tab = 'import'">Import</button>
       </div>
+
+      <trade-import v-if="tab === 'import'" @imported="onImported"></trade-import>
 
       <div v-if="tab === 'log'">
         <div class="card" v-if="sortedTrades.length">

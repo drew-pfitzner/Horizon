@@ -6,6 +6,7 @@ from routes.market_check import bp as market_check_bp
 from routes.research import bp as research_bp
 from routes.valuation import bp as valuation_bp
 from routes.trades import bp as trades_bp
+from routes.trade_import import bp as trade_import_bp
 from routes.smart_money import bp as smart_money_bp
 from routes.settings import bp as settings_bp
 from routes.backup import bp as backup_bp
@@ -22,6 +23,7 @@ def create_app():
     app.register_blueprint(research_bp, url_prefix="/api/research")
     app.register_blueprint(valuation_bp, url_prefix="/api/valuation")
     app.register_blueprint(trades_bp, url_prefix="/api/trades")
+    app.register_blueprint(trade_import_bp, url_prefix="/api/trades/import")
     app.register_blueprint(smart_money_bp, url_prefix="/api/smart-money")
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
     app.register_blueprint(backup_bp, url_prefix="/api/backup")
