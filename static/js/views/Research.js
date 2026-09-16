@@ -31,11 +31,6 @@ export const Research = {
       prefilling: false,
       prefillInfo: null,
       prefillError: null,
-      watching: false,
-      // The active alert_watch row for the ticker in the form, or null. Loaded
-      // from the server so the button shows an existing watch, not just one
-      // added in this session.
-      watchInfo: null,
       listSort: { key: "updated_at", dir: "desc" },
       smSort: { key: "weight", dir: "desc" },
       picker: { open: false, ticker: "", match: null, checked: false },
@@ -94,36 +89,6 @@ export const Research = {
         can_invest: can_trade && !!this.form.price_below_mos,
       };
     },
-    // Alert kind implied by the current decision — mirrors _kind_from_decision
-    // in routes/alerts.py.
-    watchKind() {
-      return (this.form.decision || "").toUpperCase() === "INVEST" ? "Invest" : "Trade";
-    },
-    // Label / enabled state for the Watch to Buy button. A ticker already on an
-    // active watch list says so and is not re-addable; the one exception is a
-    // kind that no longer matches the decision, where pressing again updates it.
-    watchButton() {
-      if (this.watching) return { label: "Adding…", disabled: true, title: "" };
-      const w = this.watchInfo;
-      if (!w) {
-        return {
-          label: "☆ Watch to Buy", disabled: false,
-          title: "Add this ticker to the Buy alerts list (watches for a buy signal)",
-        };
-      }
-      const list = w.bucket === "HELD" ? "Held" : "Buy";
-      if (w.kind !== this.watchKind) {
-        return {
-          label: `★ Watching — set ${this.watchKind}`,
-          disabled: false,
-          title: `Already on the ${list} alerts list as ${w.kind}; press to switch it to ${this.watchKind}`,
-        };
-      }
-      return {
-        label: `★ Watching (${list})`, disabled: true,
-        title: `Already on the ${list} alerts list as ${w.kind} — no need to add it again`,
-      };
-    },
   },
   methods: {
     _emptyForm() {
@@ -159,11 +124,9 @@ export const Research = {
       this.smHolders = null;
       this.valuation = null;
       this.saveError = null;
-      this.watchInfo = null;
       this.mode = "new";
       this.scrollTop();
       if (this.form.ticker) {
-        this.fetchWatchStatus();
         // Kick off background lookups so company / valuation / SM data populate.
         this.fetchSmartMoney();
         this.fetchValuation();
@@ -231,31 +194,17 @@ export const Research = {
       this.smHolders = null;
       this.valuation = null;
       this.saveError = null;
-      this.watchInfo = null;
       this.mode = "edit";
       this.scrollTop();
       this.fetchSmartMoney();
       this.fetchValuation();
-      this.fetchWatchStatus();
     },
     scrollTop() {
       this.$nextTick(() => window.scrollTo({ top: 0, behavior: "auto" }));
     },
     cancel() { this.mode = "list"; this.smHolders = null; this.saveError = null; this.clearPrefillState(); },
     async onTickerBlur() {
-      await Promise.all([this.fetchSmartMoney(), this.fetchValuation(), this.prefillCompany(false),
-                         this.fetchWatchStatus()]);
-    },
-    // Is the ticker in the form already on an active watch list?
-    async fetchWatchStatus() {
-      const t = (this.form.ticker || "").trim().toUpperCase();
-      if (!t) { this.watchInfo = null; return; }
-      try {
-        this.watchInfo = await get("/api/alerts/watch-status?ticker=" + encodeURIComponent(t));
-      } catch (e) {
-        this.watchInfo = null;
-        console.error(e);
-      }
+      await Promise.all([this.fetchSmartMoney(), this.fetchValuation(), this.prefillCompany(false)]);
     },
     async prefillCompany(force) {
       const t = (this.form.ticker || "").trim().toUpperCase();
@@ -336,21 +285,6 @@ export const Research = {
         .forEach(k => { this.form[k] = false; });
       this.valuation = null;
       this.clearPrefillState();
-    },
-    // One-click: add this ticker to the Buy alerts list, carrying the current
-    // decision as the alert kind (INVEST → Invest, else Trade).
-    async watchToBuy() {
-      const t = (this.form.ticker || "").trim().toUpperCase();
-      if (!t) return;
-      this.watching = true;
-      try {
-        await post("/api/alerts/from-research", { ticker: t, decision: this.form.decision });
-        await this.fetchWatchStatus();
-      } catch (e) {
-        this.saveError = "Watch failed: " + e.message;
-      } finally {
-        this.watching = false;
-      }
     },
     // Discard the prefilled (unsaved) valuation preview and restore any saved one.
     resetPrefilledValuation() {
@@ -526,11 +460,6 @@ export const Research = {
             <button class="btn-ghost" @click="clearFields"
                     title="Clear fundamentals, company size / smart money / liquidity, and valuation (keeps ticker & company)">
               Clear
-            </button>
-            <button class="btn-ghost" :class="{ 'is-watched': watchInfo }"
-                    :disabled="!form.ticker || watchButton.disabled" @click="watchToBuy"
-                    :title="watchButton.title">
-              {{ watchButton.label }}
             </button>
             <span class="divider"></span>
             <button class="btn-primary" :disabled="saving || !form.ticker" @click="saveAndReturn">

@@ -75,12 +75,15 @@ export function daysSince(s) {
   return Math.round((today - d) / 86400000);
 }
 
-// Human label for a days-since count: "today", "1 day ago", "12 days ago".
+// Human label for a days-since count: "today", "12 days ago" under a month,
+// then whole months — "1 month ago", "7 months ago".
 export function fmtDaysSince(s) {
   const n = daysSince(s);
   if (n == null) return "—";
   if (n <= 0) return "today";
-  return `${n} day${n === 1 ? "" : "s"} ago`;
+  if (n < 30) return `${n} day${n === 1 ? "" : "s"} ago`;
+  const m = Math.floor(n / 30.44) || 1;
+  return `${m} month${m === 1 ? "" : "s"} ago`;
 }
 
 export function statusClass(status) {

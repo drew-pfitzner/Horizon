@@ -89,7 +89,7 @@ cd Horizon
   - Shows average/median/MOS across 5 years
 - Smart money lookup (which gurus hold, %, QoQ changes)
 - Decision: TRADE / INVEST / NO ACTION
-- Can mark for watchlist
+- TRADE/INVEST decisions feed the Alerts Buy list automatically (no watch button)
 
 ### Trades
 - Log entry (ticker, date, price, shares)
@@ -149,6 +149,7 @@ docker compose down             # Stop
 - **Docker context:** Build context is `Horizon/` itself; single `requirements.txt` installs both Horizon and smart_money deps
 - **Flask debug:** Set `FLASK_DEBUG=0` in Docker so auto-reloader doesn't kill background threads; defaults to `1` (true) locally
 - **Schedulers:** three daemon threads, all started in `app.py` behind the `WERKZEUG_RUN_MAIN` guard so the dev reloader doesn't double them — `alert_job` (daily signal check), `sm_job` (weekly 13F update), `market_data_job` (daily market-check fill). Each wakes at most hourly so a settings change lands without waiting out the full interval, and each catches up on boot if the box was off through its slot
+- **Alerts watch lists are derived** (`watch_sync.sync()`, run on every list read, check and "Signal now"): open trades → Held (kind from strategy), latest research per ticker with TRADE/INVEST → Buy (kind from decision), skipping research older than `alert_research_max_months` (default 6, 0 = no limit; set on the Alerts tab). Nothing is added/removed by hand. Dropped tickers are soft-deleted; one that returns after more than 7 days has its watermark cleared so it re-arms instead of pushing an old catch-up signal.
 - **Alerts dedupe:** each watch carries a `last_checked_bar` watermark; a ticker with a NULL watermark is *armed* at the current bar and fires nothing (no stale back-fill). Removing a watch is therefore a **soft delete** (`active = 0`) — a hard delete dropped the watermark, so remove/re-add re-armed the ticker and swallowed the signal in progress. Re-adding revives the same row.
 - **Alerts "Signal now"** (`GET /api/alerts/now` → `alert_job.current_state()`): read-only snapshot of every active watch at the latest closed bar, ignoring the watermark and sending nothing. Reports the edge on that bar plus the most recent signal in the 2y window, tagged `sent` / `missed` (watermark was already past it) / `pending`. Use it when an expected alert never arrived — a normal check can't tell you, since an armed or already-fired ticker is silent by design. Network-bound (parallel price fetches), so it's an explicit button, not on mount.
 

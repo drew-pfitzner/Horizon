@@ -27,12 +27,14 @@ export const Alerts = {
     return {
       buy: [],
       held: [],
-      seed: { buy: [], held: [] },
+      stale: [],
+      maxMonths: 6,
+      savedMaxMonths: 6,
+      savingMax: false,
       signal: null,
       signalDefaults: null,
       log: [],
       status: { status: "idle", last_summary: null, output: [], finished_at: null },
-      addForm: { ticker: "", bucket: "BUY", kind: "Trade" },
       savingSignal: false,
       checking: false,
       showSignal: false,
@@ -66,8 +68,8 @@ export const Alerts = {
         const d = await get("/api/alerts/watches");
         this.buy = d.buy || [];
         this.held = d.held || [];
-        const s = await get("/api/alerts/seed");
-        this.seed = s || { buy: [], held: [] };
+        this.stale = d.stale || [];
+        this.maxMonths = this.savedMaxMonths = d.max_months;
       } catch (e) { this.flash(e.message, true); }
     },
     async loadSignal() {
@@ -97,35 +99,15 @@ export const Alerts = {
       try { this.status = await get("/api/alerts/status"); } catch (e) { console.error(e); }
     },
 
-    async addWatch() {
-      const t = (this.addForm.ticker || "").trim().toUpperCase();
-      if (!t) return;
+    async saveMaxMonths() {
+      const n = Math.max(0, Math.min(120, parseInt(this.maxMonths, 10) || 0));
+      this.savingMax = true;
       try {
-        await post("/api/alerts/watches", { ticker: t, bucket: this.addForm.bucket, kind: this.addForm.kind });
-        this.addForm.ticker = "";
+        await put("/api/alerts/settings", { alert_research_max_months: n });
         await this.refresh();
+        this.flash(n ? `Buy list now skips research older than ${n} month${n === 1 ? "" : "s"}.` : "Buy list now includes research of any age.");
       } catch (e) { this.flash(e.message, true); }
-    },
-    async addSeed(ticker, bucket, kind) {
-      try {
-        await post("/api/alerts/watches", { ticker, bucket, kind: kind || "Trade" });
-        await this.refresh();
-      } catch (e) { this.flash(e.message, true); }
-    },
-    async moveTo(w, bucket) {
-      try { await put(`/api/alerts/watches/${w.id}`, { bucket }); await this.refresh(); }
-      catch (e) { this.flash(e.message, true); }
-    },
-    async setKind(w, kind) {
-      try { await put(`/api/alerts/watches/${w.id}`, { kind }); await this.refresh(); }
-      catch (e) { this.flash(e.message, true); }
-    },
-    async remove(w) {
-      try {
-        await del(`/api/alerts/watches/${w.id}`);
-        this.now = this.now ? this.now.filter(r => r.ticker !== w.ticker) : null;
-        await this.refresh();
-      } catch (e) { this.flash(e.message, true); }
+      finally { this.savingMax = false; }
     },
 
     // Read-only "what does the signal look like right now?" — no push, no dedupe.
@@ -216,86 +198,61 @@ export const Alerts = {
     <p v-if="err" class="text-red">{{ err }}</p>
 
     <div class="alerts-grid">
-      <!-- BUY list -->
+      <!-- BUY list — derived from Research -->
       <div class="card">
         <div class="card-head">
           <h3>Buy</h3>
-          <span class="text-muted">watching for BUY signals</span>
+          <span class="text-muted">TRADE / INVEST research · watching for BUY</span>
         </div>
         <table v-if="buy.length" class="table">
-          <thead><tr><th>Ticker</th><th>Kind</th><th></th></tr></thead>
+          <thead><tr><th>Ticker</th><th>Kind</th><th class="num">Researched</th></tr></thead>
           <tbody>
             <tr v-for="w in buy" :key="w.id">
               <td><strong>{{ w.ticker }}</strong></td>
-              <td>
-                <span class="badge kind-toggle" :class="kindBadge(w.kind)"
-                      @click="setKind(w, w.kind === 'Invest' ? 'Trade' : 'Invest')"
-                      title="Click to toggle Trade/Invest">{{ w.kind }}</span>
-              </td>
-              <td class="num row-actions">
-                <button class="btn-ghost sm" @click="moveTo(w, 'HELD')" title="You bought it — watch to add/sell too">Now holding →</button>
-                <button class="icon-btn danger" @click="remove(w)" title="Remove">✕</button>
-              </td>
+              <td><span class="badge" :class="kindBadge(w.kind)">{{ w.kind }}</span></td>
+              <td class="num text-muted">{{ fmtDaysSince(w.date_researched) }}</td>
             </tr>
           </tbody>
         </table>
-        <p v-else class="empty">No buy watches. Add one below, or use “☆ Watch to Buy” in Research.</p>
+        <p v-else class="empty">Nothing to watch. Research a ticker with a TRADE or INVEST decision and it appears here.</p>
 
-        <div v-if="seed.buy.length" class="seed-box">
-          <span class="text-muted">From research:</span>
-          <button v-for="s in seed.buy" :key="s.ticker" class="pill" @click="addSeed(s.ticker, 'BUY', s.kind)">
-            + {{ s.ticker }} <span class="text-muted">{{ s.kind }}</span>
+        <div class="max-age-row">
+          <label>Skip research older than</label>
+          <input type="number" min="0" max="120" v-model.number="maxMonths" @keyup.enter="saveMaxMonths">
+          <span class="text-muted">months</span>
+          <button v-if="maxMonths !== savedMaxMonths" class="btn-ghost sm" :disabled="savingMax" @click="saveMaxMonths">
+            {{ savingMax ? 'Saving…' : 'Save' }}
           </button>
+          <span class="text-muted sig-note">0 = no limit</span>
+        </div>
+        <div v-if="stale.length" class="seed-box">
+          <span class="text-muted">Skipped — too old, re-research to include:</span>
+          <span v-for="s in stale" :key="s.ticker" class="pill" :title="'Researched ' + s.date_researched">
+            {{ s.ticker }} <span class="text-muted">{{ fmtDaysSince(s.date_researched) }}</span>
+          </span>
         </div>
       </div>
 
-      <!-- HELD list -->
+      <!-- HELD list — derived from open trades -->
       <div class="card">
         <div class="card-head">
           <h3>Held</h3>
-          <span class="text-muted">watching to ADD or SELL</span>
+          <span class="text-muted">open trades · watching to ADD or SELL</span>
         </div>
         <table v-if="held.length" class="table">
-          <thead><tr><th>Ticker</th><th>Kind</th><th></th></tr></thead>
+          <thead><tr><th>Ticker</th><th>Kind</th></tr></thead>
           <tbody>
             <tr v-for="w in held" :key="w.id">
               <td><strong>{{ w.ticker }}</strong></td>
-              <td>
-                <span class="badge kind-toggle" :class="kindBadge(w.kind)"
-                      @click="setKind(w, w.kind === 'Invest' ? 'Trade' : 'Invest')"
-                      title="Click to toggle Trade/Invest">{{ w.kind }}</span>
-              </td>
-              <td class="num row-actions">
-                <button class="btn-ghost sm" @click="moveTo(w, 'BUY')" title="Back to buy-only watching">← Back to Buy</button>
-                <button class="icon-btn danger" @click="remove(w)" title="Remove">✕</button>
-              </td>
+              <td><span class="badge" :class="kindBadge(w.kind)">{{ w.kind }}</span></td>
             </tr>
           </tbody>
         </table>
-        <p v-else class="empty">No held watches. Move a Buy ticker here once you own it.</p>
-
-        <div v-if="seed.held.length" class="seed-box">
-          <span class="text-muted">From open trades:</span>
-          <button v-for="t in seed.held" :key="t" class="pill" @click="addSeed(t, 'HELD', 'Trade')">+ {{ t }}</button>
-        </div>
+        <p v-else class="empty">No open trades. Log a trade and it appears here; close it and it drops off.</p>
       </div>
     </div>
 
-    <!-- Add row -->
-    <div class="card add-card">
-      <div class="add-row">
-        <input type="text" class="ticker-input" v-model="addForm.ticker" placeholder="TICKER" @keyup.enter="addWatch">
-        <div class="seg">
-          <button :class="{ on: addForm.bucket === 'BUY' }" @click="addForm.bucket = 'BUY'">Buy</button>
-          <button :class="{ on: addForm.bucket === 'HELD' }" @click="addForm.bucket = 'HELD'">Held</button>
-        </div>
-        <div class="seg">
-          <button :class="{ on: addForm.kind === 'Trade' }" @click="addForm.kind = 'Trade'">Trade</button>
-          <button :class="{ on: addForm.kind === 'Invest' }" @click="addForm.kind = 'Invest'">Invest</button>
-        </div>
-        <button class="btn-primary" :disabled="!addForm.ticker.trim()" @click="addWatch">Add ticker</button>
-      </div>
-    </div>
+    <p class="text-muted sig-note">Both lists update themselves from Research and Trades — there's nothing to add or remove here.</p>
 
     <!-- Signal settings (mirror TradingView) -->
     <div class="card" v-if="signal">
@@ -424,7 +381,7 @@ export const Alerts = {
           <p v-if="detail.row.error" class="text-red sig-note">{{ detail.row.error }}</p>
           <p class="text-muted sig-note">
             “Now” is an edge on the latest closed bar, so it clears the day after it fires — “Last signal” is the one to read.
-            <span class="text-red">never sent</span> means the ticker was armed past that bar (removing and re-adding a ticker no longer does this).
+            <span class="text-red">never sent</span> means the ticker was armed past that bar.
           </p>
         </template>
 

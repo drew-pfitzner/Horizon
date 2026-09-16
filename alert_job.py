@@ -20,6 +20,7 @@ from db import get_db, get_setting
 from prices import fetch_history
 from signals import evaluate
 from notify import push_signal, action_for
+import watch_sync
 
 ET = ZoneInfo("America/New_York")
 MARKET_CLOSE_HOUR = 16  # 4pm ET; today's bar isn't final before this
@@ -110,6 +111,7 @@ def run_checks():
     signal_params = get_setting("alert_signal", None)
     fired, failed, checked = 0, 0, 0
     try:
+        watch_sync.sync()
         with get_db() as db:
             watches = db.execute(
                 "SELECT ticker, bucket, kind, last_checked_bar FROM alert_watch "
@@ -218,6 +220,7 @@ def current_state():
     """
     now_et = datetime.now(ET)
     signal_params = get_setting("alert_signal", None)
+    watch_sync.sync()
     with get_db() as db:
         watches = [dict(r) for r in db.execute(
             "SELECT ticker, bucket, kind, last_checked_bar FROM alert_watch "
