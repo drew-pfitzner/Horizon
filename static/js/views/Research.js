@@ -709,12 +709,14 @@ export const Research = {
                    @keyup.enter="pickerSubmit"
                    placeholder="AAPL" autocomplete="off">
           </div>
-          <div v-if="picker.checked && picker.match" style="margin: 0.75rem 0; padding: 0.75rem; border-radius: 4px; background: var(--bg-3);">
-            <strong>{{ picker.match.ticker }}</strong>
-            <span class="text-muted"> — {{ picker.match.company_name || 'no name' }}</span>
-            <div class="text-muted" style="font-size: 0.8rem; margin-top: 0.25rem;">
-              Last researched {{ fmtDate(picker.match.date_researched) }} ({{ fmtDaysSince(picker.match.date_researched) }}) · Score {{ picker.match.fundamentals_score }}/10 ·
-              <span :class="decisionClass(picker.match.decision)">{{ picker.match.decision || 'NO_ACTION' }}</span>
+          <div v-if="picker.checked && picker.match" class="picker-match">
+            <div class="picker-id">
+              <span class="picker-ticker">{{ picker.match.ticker }}</span>
+              <span class="picker-name">{{ picker.match.company_name || 'no name' }}</span>
+            </div>
+            <div class="picker-meta">
+              <span class="picker-ago" :title="fmtDate(picker.match.date_researched)">{{ fmtDaysSince(picker.match.date_researched) }}</span>
+              <span :class="decisionClass(picker.match.decision)">{{ (picker.match.decision || 'NO_ACTION').replace('_', ' ') }}</span>
             </div>
           </div>
           <div v-else-if="picker.checked && picker.ticker" class="text-muted" style="margin: 0.75rem 0; font-size: 0.85rem;">
