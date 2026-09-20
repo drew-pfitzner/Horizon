@@ -129,6 +129,12 @@ def _run():
 
         if proc.returncode == 0:
             _set(status="done")
+            # Freshness stamp for the Home view. Written on success only, and by
+            # *both* paths (button and scheduler) — `sm_last_auto_run` is the
+            # scheduler's own slot bookkeeping and doesn't move when you press
+            # Update, so it can't answer "how old is this data?".
+            from db import set_setting as _set_setting
+            _set_setting("sm_last_run", _local_now().isoformat(timespec="seconds"))
         else:
             _set(status="error", error=f"exit code {proc.returncode}")
     except Exception as e:
@@ -247,4 +253,6 @@ def schedule_info():
         "timezone": "US/Eastern",
         "next_run": (now + timedelta(seconds=delay)).isoformat(timespec="seconds"),
         "last_auto_run": _get("sm_last_auto_run", None),
+        # Last run that actually completed, whoever started it.
+        "last_run": _get("sm_last_run", None) or _get("sm_last_auto_run", None),
     }

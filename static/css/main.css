@@ -374,6 +374,29 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .home-stats .stat { text-align: center; }
 
+/* Home stat tiles double as links into the tab that owns the number. Kept as
+   divs with role=button (a .stat is block content, not phrasing), so the
+   keyboard affordances are spelled out rather than inherited. */
+.stat-link {
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+.stat-link:hover { border-color: var(--accent); background: var(--bg-3); }
+.stat-link:active { transform: scale(0.99); }
+.stat-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stat .stat-note { font-size: 0.72rem; color: var(--text-2); margin-top: 0.3rem; }
+
+/* Collapsed technicals: the thresholds on one line, so folding them away
+   doesn't cost you the numbers. */
+.rules-card .card-head { margin-bottom: 0; flex-wrap: wrap; }
+.rules-card .card-head.collapsible h3 { white-space: nowrap; }
+.rules-summary { font-size: 0.82rem; color: var(--text-2); }
+.rules-summary .rules-sep { color: var(--border); margin: 0 0.35rem; }
+.rules-body { margin-top: 1rem; }
+.rules-body .trade-rule-card h3 { margin-top: 0; }
+@media (max-width: 600px) { .rules-summary { flex-basis: 100%; } }
+
 .banner-position {
   margin: 1rem auto 0;
   padding: 0.9rem 1.5rem;

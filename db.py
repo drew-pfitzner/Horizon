@@ -37,6 +37,8 @@ DEFAULT_SETTINGS = {
     "sm_update_day": 6,
     "sm_update_time": "07:00",
     "sm_last_auto_run": None,
+    # Last completed run of either kind (button or scheduler) — freshness, not scheduling.
+    "sm_last_run": None,
     # Market Check: daily auto-fill from live sources (US/Eastern, after the close).
     "mc_auto_enabled": False,
     "mc_auto_time": "16:40",

@@ -75,6 +75,38 @@ cd Horizon
 
 ## Key Features
 
+### Home
+The daily glance, ordered by how often it changes. Nothing on it is typed in —
+every number is read from the tab that owns it, and every tile is a way through
+to that tab (click, or Enter when focused).
+
+- **Gate banner** — today's CAN TRADE / CAUTION / NO TRADE plus the position size
+  in dollars. Unchanged.
+- **Four tiles** — Researched, Open Trades, **Avg ROI**, **Return on Capital**.
+  The last two replaced "This Month ROI", which was noise: a month with no closed
+  trades reads 0% and a single trade swings it wildly. They answer different
+  questions on purpose — Avg ROI is the mean across every closed trade all-time
+  (each trade counts once, so it measures the *method*), ROC is this year's
+  realised P/L over portfolio value (weighted by money, so it measures the
+  *account*). Both come straight off `/api/trades/performance` as `avg_roi` /
+  `return_on_capital`; neither is recomputed here.
+- **Recent alerts** — the last 5 BUY / ADD / SELL the phone was actually sent,
+  from `/api/alerts/log`. Rows where `ok = 0` (a price fetch that failed) carry no
+  action and are filtered out — they're diagnostics, not something to act on, and
+  stay on the Alerts tab. Sorted by `sent_at`, not insertion order.
+- **Smart money freshness** — when the 13F data last ran, and whether the weekly
+  auto-update is on. This is the one thing on the app that goes stale silently.
+- **Technicals** — the Buy/Sell rule cards, now collapsed by default into a single
+  summary line (`Buy RSI < 35 · STO < 20 · fast over slow | …`) with the full cards
+  a click away. The alerts job checks these conditions itself now, so they're
+  reference material rather than a daily read; the open/closed choice is remembered
+  in `localStorage` under `horizon.home.rulesOpen`.
+
+Everything loads in one parallel batch on mount, and each call is allowed to fail
+on its own (one dead endpoint blanks its own tile rather than the page). Nothing
+here touches the network beyond the local API — no price fetches, so Home stays
+instant.
+
 ### Market Check
 - 6 indicators once per day → get YES/NO to trade + position size %
 - **Fetch live data** button fills all six; or turn on the daily auto-fill in Settings
@@ -325,6 +357,14 @@ nothing is ever more than a week stale.
   recorded run, every past slot would look "missed" and enabling it would kick off a
   full SEC pull on the next restart. The manual button is there for an immediate run.
 - A scheduled run that collides with a manual one simply skips; next week catches it.
+- **`sm_last_run` vs `sm_last_auto_run`.** The latter is the scheduler's own slot
+  bookkeeping — it records when a *scheduled* run went out and is what `_due()`
+  compares against, so pressing Update doesn't move it. That makes it the wrong
+  answer to "how old is this data?", which is what Home asks. `sm_last_run` is
+  stamped by `_run()` on success from **both** paths, and `schedule_info()` exposes
+  it as `last_run` (falling back to `last_auto_run` for installs that predate it).
+  Written on success only: a run that errors leaves the stamp alone, because the
+  data really is still as old as it was.
 
 ## Terminal research script (`research_cli.py`)
 
