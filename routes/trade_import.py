@@ -14,7 +14,7 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify
 
 import ibkr_import as imp
-from db import get_db
+from db import get_db, get_setting, set_setting
 from routes.trades import _compute_pl, _portfolio_pos_pct, commission_pct
 
 bp = Blueprint("trade_import", __name__)
@@ -59,7 +59,20 @@ def _plan_from_request(payload):
     plan = imp.build_plan(parsed, trades, known,
                           commission_pct=commission_pct(),
                           resolutions=payload.get("resolutions") or {})
+    _annotate_portfolio(plan)
     return plan
+
+
+def _annotate_portfolio(plan):
+    """Hang the stored portfolio value alongside the statement's, so the panel
+    can show the change before anything is written. An Activity Statement states
+    the account's NAV; the other report shapes don't, and then there's no card."""
+    found = plan.get("portfolio")
+    if not found:
+        return
+    stored = get_setting("portfolio") or {}
+    found["currency"] = found.get("currency") or stored.get("currency") or "AUD"
+    found["stored"] = {"value": stored.get("value"), "currency": stored.get("currency")}
 
 
 @bp.route("/preview", methods=["POST"])
@@ -104,6 +117,10 @@ def apply():
     created = updated = fills_added = 0
     touched = []
 
+    # The account's NAV goes in first, so the position sizes worked out for the
+    # rows below are measured against the portfolio the statement describes.
+    portfolio = _save_portfolio(plan) if payload.get("update_portfolio") else None
+
     with get_db() as db:
         for action in plan["actions"]:
             if action["key"] not in wanted:
@@ -143,7 +160,23 @@ def apply():
         "created": created, "updated": updated, "fills_added": fills_added,
         "tickers": sorted(set(touched)),
         "period": plan["period"],
+        "portfolio": portfolio,
     }})
+
+
+def _save_portfolio(plan):
+    """Write the statement's NAV into the `portfolio` setting the position
+    sizing reads. Only the value and its currency are ours; anything else stored
+    under the key is left alone."""
+    found = plan.get("portfolio")
+    if not found or found.get("value") is None:
+        return None
+    stored = dict(get_setting("portfolio") or {})
+    stored["value"] = found["value"]
+    stored["currency"] = found.get("currency") or stored.get("currency") or "AUD"
+    set_setting("portfolio", stored)
+    return {"value": stored["value"], "currency": stored["currency"],
+            "as_of": found.get("as_of")}
 
 
 def _apply_action(db, action, strategy, now):

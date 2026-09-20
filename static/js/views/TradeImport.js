@@ -1,10 +1,10 @@
-// Paste-a-statement import for the trade log.
+// Statement-file import for the trade log.
 //
-// The panel never computes anything itself: it posts the CSV to /preview, shows
-// the plan the server built, and posts the same CSV back to /apply with the
-// answers attached. Changing an answer re-previews, so what's on screen is
-// always a plan the server just produced rather than one patched up in the
-// browser.
+// The panel never computes anything itself: it reads the chosen file, posts it
+// to /preview, shows the plan the server built, and posts the same text back to
+// /apply with the answers attached. Changing an answer re-previews, so what's on
+// screen is always a plan the server just produced rather than one patched up in
+// the browser.
 import { post, fmtDate, fmtMoney, fmtShares } from "../utils.js";
 
 const FIELD_LABELS = {
@@ -19,6 +19,8 @@ export const TradeImport = {
     return {
       csv: "",
       fileName: "",
+      dragging: false,
+      updatePortfolio: true,   // the statement's NAV replaces the stored one
       plan: null,
       resolutions: {},   // action key -> { mode, entry_date, entry_price }
       accepted: {},      // action key -> bool
@@ -71,8 +73,24 @@ export const TradeImport = {
       return Number(v).toFixed(4);
     },
 
+    fmtAmount(v, currency) {
+      if (v === null || v === undefined || v === "") return "—";
+      const n = Number(v).toLocaleString("en-US",
+        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return currency ? `${n} ${currency}` : n;
+    },
+
     onFile(event) {
-      const file = event.target.files && event.target.files[0];
+      this.read(event.target.files && event.target.files[0]);
+    },
+
+    // Dropping the file on the panel is the same path as picking it.
+    onDrop(event) {
+      this.dragging = false;
+      this.read(event.dataTransfer && event.dataTransfer.files[0]);
+    },
+
+    read(file) {
       if (!file) return;
       this.fileName = file.name;
       const reader = new FileReader();
@@ -81,7 +99,7 @@ export const TradeImport = {
     },
 
     async preview() {
-      if (!this.csv.trim()) { this.error = "Paste a CSV first."; return; }
+      if (!this.csv.trim()) { this.error = "Choose a CSV file."; return; }
       this.loading = true;
       this.error = null;
       this.result = null;
@@ -127,6 +145,7 @@ export const TradeImport = {
           resolutions: this.resolutions,
           accept: this.acceptedKeys,
           strategies: this.strategies,
+          update_portfolio: !!(this.plan.portfolio && this.updatePortfolio),
         });
         this.$emit("imported", this.result);
         await this.preview();     // re-plan: everything applied should now read "already imported"
@@ -141,7 +160,11 @@ export const TradeImport = {
       Object.assign(this, {
         csv: "", fileName: "", plan: null, resolutions: {}, accepted: {},
         strategies: {}, expanded: {}, error: null, result: null,
+        updatePortfolio: true,
       });
+      // Clearing the input's value matters: without it, choosing the same file
+      // again fires no change event and the panel looks dead.
+      if (this.$refs.file) this.$refs.file.value = "";
     },
 
     badgeClass(action) {
@@ -157,28 +180,16 @@ export const TradeImport = {
 
   template: `
     <div class="import-panel">
-      <div class="card">
-        <h3 style="margin-top:0;">Import from your broker</h3>
-        <p class="text-muted" style="margin-top:0; font-size:.86rem; line-height:1.5;">
-          Paste an IBKR <strong>Transaction History</strong> report (or an Activity Statement / Trades
-          Flex Query export). One month or all time — fills already in the log are recognised and
-          skipped, so overlapping statements are safe to paste again.
-        </p>
-
-        <div class="field">
-          <textarea v-model="csv" rows="6" class="import-csv"
-                    placeholder="Statement,Header,Field Name,Field Value&#10;…paste the whole file here…"></textarea>
-        </div>
-
+      <div class="card import-drop" :class="{ dragging }"
+           @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false"
+           @drop.prevent="onDrop">
         <div class="toolbar">
-          <button class="btn-primary" :disabled="loading || !csv.trim()" @click="preview">
-            {{ loading ? 'Reading…' : 'Preview changes' }}
-          </button>
-          <label class="btn-ghost import-file">
-            Choose a file…
-            <input type="file" accept=".csv,text/csv" @change="onFile" hidden>
+          <label class="btn btn-primary import-file">
+            {{ loading ? 'Reading…' : 'Choose a CSV file…' }}
+            <input type="file" accept=".csv,text/csv" ref="file" @change="onFile" hidden>
           </label>
-          <span v-if="fileName" class="text-muted" style="font-size:.8rem;">{{ fileName }}</span>
+          <span v-if="fileName" class="import-filename">{{ fileName }}</span>
+          <span v-else class="text-muted" style="font-size:.8rem;">or drop it here</span>
           <div class="spacer"></div>
           <button class="btn-ghost" v-if="plan || csv" @click="reset">Clear</button>
         </div>
@@ -194,6 +205,10 @@ export const TradeImport = {
         <div class="text-muted" style="font-size:.82rem; margin-top:.25rem;" v-if="result.tickers.length">
           {{ result.tickers.join(', ') }}
         </div>
+        <div class="text-muted" style="font-size:.82rem; margin-top:.25rem;" v-if="result.portfolio">
+          Portfolio value set to
+          {{ fmtAmount(result.portfolio.value, result.portfolio.currency) }}.
+        </div>
       </div>
 
       <template v-if="plan">
@@ -208,6 +223,19 @@ export const TradeImport = {
             <div class="stat-value">{{ plan.fills_in_file }}</div>
             <div class="stat-note text-muted">
               {{ plan.fills_new }} new · {{ plan.fills_known }} already logged
+            </div>
+          </div>
+          <div class="import-stat" v-if="plan.portfolio">
+            <div class="stat-label">Portfolio value</div>
+            <div class="stat-value">
+              {{ fmtAmount(plan.portfolio.value, plan.portfolio.currency) }}
+            </div>
+            <div class="stat-note text-muted">
+              now {{ fmtAmount(plan.portfolio.stored.value, plan.portfolio.stored.currency) }}
+              <label class="import-nav-opt">
+                <input type="checkbox" v-model="updatePortfolio">
+                Update on apply
+              </label>
             </div>
           </div>
           <div class="import-stat" v-if="plan.account">
@@ -335,6 +363,12 @@ export const TradeImport = {
           <strong class="text-green">Nothing to do — the log already matches this statement.</strong>
           <div class="text-muted" style="font-size:.84rem; margin-top:.3rem;">
             All {{ plan.fills_in_file }} fill(s) in this file are already recorded.
+          </div>
+          <!-- The trades may be old news while the NAV isn't. -->
+          <div class="toolbar" style="margin-top:.6rem;" v-if="plan.portfolio && updatePortfolio">
+            <button class="btn-ghost" :disabled="applying" @click="applyPlan">
+              {{ applying ? 'Saving…' : 'Update portfolio value' }}
+            </button>
           </div>
         </div>
 

@@ -145,10 +145,17 @@ def _split_sections(rows):
         Transaction History,Header,Date,Account,Description,...
         Transaction History,Data,2026-09-14,U***56746,DECKERS OUTDOOR CORP,...
 
-    Return {section: (header, [data rows])}. A flat CSV (a Flex query export)
-    has no such prefix and comes back under the key ''.
+    Return {section: [(header, [data rows]), ...]} — a *list* of blocks per
+    section, because one section can change columns mid-stream. An Activity
+    Statement's Trades section emits a Stocks block (with 'Comm/Fee') and then a
+    Forex block (with 'Comm in AUD'); folding them onto one header silently
+    mis-reads the commission of every stock fill. A flat CSV (a Flex query
+    export) has no section prefix and comes back as one block under the key ''.
+
+    Rows flagged anything other than Header/Data — IBKR's SubTotal and Total
+    lines — are dropped here: they restate fills that are already in the file.
     """
-    sectioned = defaultdict(lambda: {"header": None, "rows": []})
+    sectioned = defaultdict(list)
     flat_header, flat_rows = None, []
     looks_sectioned = any(len(r) >= 2 and r[1].strip() in ("Header", "Data") for r in rows)
 
@@ -157,11 +164,10 @@ def _split_sections(rows):
             continue
         if looks_sectioned and len(row) >= 2 and row[1].strip() in ("Header", "Data"):
             section = row[0].strip()
-            kind = row[1].strip()
-            if kind == "Header":
-                sectioned[section]["header"] = row[2:]
-            else:
-                sectioned[section]["rows"].append(row[2:])
+            if row[1].strip() == "Header":
+                sectioned[section].append((row[2:], []))
+            elif sectioned[section]:
+                sectioned[section][-1][1].append(row[2:])
             continue
         if not looks_sectioned:
             if flat_header is None:
@@ -169,9 +175,9 @@ def _split_sections(rows):
             else:
                 flat_rows.append(row)
 
-    out = {s: (v["header"], v["rows"]) for s, v in sectioned.items() if v["header"]}
+    out = {s: blocks for s, blocks in sectioned.items() if blocks}
     if flat_header is not None:
-        out[""] = (flat_header, flat_rows)
+        out[""] = [(flat_header, flat_rows)]
     return out
 
 
@@ -190,19 +196,34 @@ def _side_of(side_raw, qty):
     return None
 
 
+def _section_rows(sections, name):
+    """Every data row of a section, across all of its header blocks."""
+    out = []
+    for _header, rows in sections.get(name, []):
+        out.extend(rows)
+    return out
+
+
+def _field(sections, name, *labels):
+    """Value of a 'Field Name,Field Value' row, e.g. Base Currency -> 'AUD'."""
+    wanted = {l.lower() for l in labels}
+    for row in _section_rows(sections, name):
+        if len(row) >= 2 and row[0].strip().lower() in wanted:
+            return row[1].strip().strip('"')
+    return None
+
+
 def _period_from_statement(sections):
     """'August 14, 2026 - September 14, 2026' off the Statement section."""
     for name in ("Statement", "Account Information"):
-        header, rows = sections.get(name, (None, None))
-        if not rows:
+        raw = _field(sections, name, "period", "fromdate", "period covered")
+        if not raw:
             continue
-        for row in rows:
-            if len(row) >= 2 and row[0].strip().lower() in ("period", "fromdate", "period covered"):
-                parts = re.split(r"\s+-\s+|\s+to\s+", row[1].strip().strip('"'))
-                start = _parse_date(parts[0])
-                end = _parse_date(parts[-1]) if len(parts) > 1 else start
-                if start:
-                    return start, end
+        parts = re.split(r"\s+-\s+|\s+to\s+", raw)
+        start = _parse_date(parts[0])
+        end = _parse_date(parts[-1]) if len(parts) > 1 else start
+        if start:
+            return start, end
     return None, None
 
 
@@ -210,7 +231,46 @@ def _account_from_statement(sections, fills):
     for f in fills:
         if f.get("account"):
             return f["account"]
-    return None
+    # An Activity Statement's Trades section carries no account column; the
+    # number is stated once, up in Account Information.
+    return _field(sections, "Account Information", "account", "account id")
+
+
+def _portfolio_from_statement(sections, period_end):
+    """What the account was worth at the end of the statement.
+
+    The Net Asset Value section's Total row is the authority — 'Current Total',
+    in the statement's base currency:
+
+        Net Asset Value,Header,Asset Class,Prior Total,Current Long,Current Short,Current Total,Change
+        Net Asset Value,Data,Total,6219.39982119,...,6216.276862505,-3.122958685
+
+    Falls back to Change in NAV's Ending Value, which is the same figure stated
+    a different way, for statements that omit the NAV breakdown. Returns None
+    when the file carries neither — a Transaction History report or a Flex
+    Query, typically, which say nothing about what the account is worth.
+    """
+    currency = (_field(sections, "Account Information", "base currency")
+                or _field(sections, "Summary", "base currency") or "").upper() or None
+
+    value = None
+    for header, rows in sections.get("Net Asset Value", []):
+        keys = [_norm_key(h) for h in header]
+        if "currenttotal" not in keys:
+            continue
+        idx = keys.index("currenttotal")
+        for row in rows:
+            if row and row[0].strip().lower() == "total":
+                value = _num(_cell(row, idx))
+                break
+        if value is not None:
+            break
+
+    if value is None:
+        value = _num(_field(sections, "Change in NAV", "ending value") or "")
+    if value is None:
+        return None
+    return {"value": value, "currency": currency, "as_of": period_end}
 
 
 def parse_csv(text):
@@ -246,87 +306,97 @@ def parse_csv(text):
     ordered = [s for s in preferred if s in sections] + \
               [s for s in sections if s not in preferred]
 
-    acct_idx_cache = {}
     for section in ordered:
-        header, data_rows = sections[section]
-        cols = _map_columns(header)
-        if not {"symbol", "qty", "price"} <= set(cols):
-            continue
-
-        keys = [_norm_key(h) for h in header]
-        acct_idx_cache[section] = keys.index("account") if "account" in keys else None
-
         section_fills = []
-        for n, row in enumerate(data_rows):
-            symbol = _cell(row, cols.get("symbol")).upper()
-            qty_raw = _num(_cell(row, cols.get("qty")))
-            side_raw = _cell(row, cols.get("side")) if "side" in cols else None
-            side = _side_of(side_raw, qty_raw)
-            desc = _cell(row, cols.get("desc"))
-
-            if side is None or symbol.lower() in _EMPTY or qty_raw is None:
-                label = (side_raw or "").strip() or "unrecognised row"
-                if label.lower() == "dividend" and symbol.lower() not in _EMPTY:
-                    dividends.append({
-                        "ticker": symbol,
-                        "date": _parse_date(_cell(row, cols.get("date"))),
-                        "description": desc,
-                    })
-                ignored[label] += 1
+        # A section can change columns partway down (Stocks then Forex, in an
+        # Activity Statement's Trades section), so each block brings its own
+        # header and its own column map.
+        for header, data_rows in sections[section]:
+            cols = _map_columns(header)
+            if not {"symbol", "qty", "price"} <= set(cols):
                 continue
 
-            asset = _cell(row, cols.get("asset")).upper() if "asset" in cols else ""
-            if _FX_SYMBOL.match(symbol) or asset in ("CASH", "FOREX", "CFD"):
-                ignored["Forex / cash"] += 1
-                continue
+            keys = [_norm_key(h) for h in header]
+            acct_idx = keys.index("account") if "account" in keys else None
+            disc_idx = keys.index("datadiscriminator") if "datadiscriminator" in keys else None
 
-            price = _num(_cell(row, cols.get("price")))
-            trade_date = _parse_date(_cell(row, cols.get("date")))
-            if price is None or trade_date is None:
-                ignored["Missing price or date"] += 1
-                continue
+            for row in data_rows:
+                # Only `Order` rows are fills; SubTotal/Total restate them.
+                if disc_idx is not None:
+                    disc = _cell(row, disc_idx).lower()
+                    if disc and disc not in ("order", "trade", "execution"):
+                        continue
 
-            qty = abs(qty_raw)
-            if qty <= QTY_EPS:
-                ignored["Zero quantity"] += 1
-                continue
+                symbol = _cell(row, cols.get("symbol")).upper()
+                qty_raw = _num(_cell(row, cols.get("qty")))
+                side_raw = _cell(row, cols.get("side")) if "side" in cols else None
+                side = _side_of(side_raw, qty_raw)
+                desc = _cell(row, cols.get("desc"))
 
-            commission = _num(_cell(row, cols.get("commission"))) if "commission" in cols else None
-            commission = abs(commission) if commission is not None else None
-            currency = (_cell(row, cols.get("currency")).upper() or "USD")
-            if currency.lower() in _EMPTY:
-                currency = "USD"
+                if side is None or symbol.lower() in _EMPTY or qty_raw is None:
+                    label = (side_raw or "").strip() or "unrecognised row"
+                    if label.lower() == "dividend" and symbol.lower() not in _EMPTY:
+                        dividends.append({
+                            "ticker": symbol,
+                            "date": _parse_date(_cell(row, cols.get("date"))),
+                            "description": desc,
+                        })
+                    ignored[label] += 1
+                    continue
 
-            txid = _cell(row, cols.get("txid")) if "txid" in cols else ""
-            acct_idx = acct_idx_cache.get(section)
-            acct = _cell(row, acct_idx) if acct_idx is not None else ""
-            account = account or acct or None
+                asset = _cell(row, cols.get("asset")).upper() if "asset" in cols else ""
+                if _FX_SYMBOL.match(symbol) or asset in ("CASH", "FOREX", "CFD"):
+                    ignored["Forex / cash"] += 1
+                    continue
 
-            # Fingerprint. The broker's own id is best; otherwise the economics
-            # of the fill, plus an occurrence counter so two genuinely identical
-            # fills in one order stay distinct.
-            if txid and txid.lower() not in _EMPTY:
-                fill_key = f"ibkr:tx:{txid}"
-            else:
-                base = (f"ibkr:{symbol}|{trade_date}|{side}|"
-                        f"{qty:.8f}|{price:.8f}")
-                seen_fingerprints[base] += 1
-                fill_key = f"{base}|{seen_fingerprints[base] - 1}"
+                price = _num(_cell(row, cols.get("price")))
+                trade_date = _parse_date(_cell(row, cols.get("date")))
+                if price is None or trade_date is None:
+                    ignored["Missing price or date"] += 1
+                    continue
 
-            section_fills.append({
-                "fill_key": fill_key,
-                "ticker": symbol,
-                "trade_date": trade_date,
-                "side": side,
-                "qty": qty,
-                "price": price,
-                "commission": commission,
-                "currency": currency,
-                "description": desc,
-                "account": acct or None,
-                "source": "ibkr",
-                "row": n,
-            })
+                qty = abs(qty_raw)
+                if qty <= QTY_EPS:
+                    ignored["Zero quantity"] += 1
+                    continue
+
+                commission = _num(_cell(row, cols.get("commission"))) if "commission" in cols else None
+                commission = abs(commission) if commission is not None else None
+                currency = (_cell(row, cols.get("currency")).upper() or "USD")
+                if currency.lower() in _EMPTY:
+                    currency = "USD"
+
+                txid = _cell(row, cols.get("txid")) if "txid" in cols else ""
+                acct = _cell(row, acct_idx) if acct_idx is not None else ""
+                account = account or acct or None
+
+                # Fingerprint. The broker's own id is best; otherwise the
+                # economics of the fill, plus an occurrence counter so two
+                # genuinely identical fills in one order stay distinct.
+                if txid and txid.lower() not in _EMPTY:
+                    fill_key = f"ibkr:tx:{txid}"
+                else:
+                    base = (f"ibkr:{symbol}|{trade_date}|{side}|"
+                            f"{qty:.8f}|{price:.8f}")
+                    seen_fingerprints[base] += 1
+                    fill_key = f"{base}|{seen_fingerprints[base] - 1}"
+
+                section_fills.append({
+                    "fill_key": fill_key,
+                    "ticker": symbol,
+                    "trade_date": trade_date,
+                    "side": side,
+                    "qty": qty,
+                    "price": price,
+                    "commission": commission,
+                    "currency": currency,
+                    "description": desc,
+                    "account": acct or None,
+                    "source": "ibkr",
+                    # Position order within the file, for replaying same-day
+                    # fills in the order the broker listed them.
+                    "row": len(section_fills),
+                })
 
         if section_fills:
             fills = section_fills
@@ -351,6 +421,9 @@ def parse_csv(text):
         "account": _account_from_statement(sections, fills) or account,
         "ignored": dict(ignored),
         "dividends": dividends,
+        # An Activity Statement also says what the account is worth; a
+        # Transaction History report doesn't, hence None rather than 0.
+        "portfolio": _portfolio_from_statement(sections, end),
     }
 
 
@@ -662,6 +735,7 @@ def build_plan(parsed, existing_trades, known_fill_keys, commission_pct=1.0,
     return {
         "period": period,
         "account": parsed.get("account"),
+        "portfolio": parsed.get("portfolio"),
         "fills_in_file": len(file_fills),
         "fills_new": len([f for f in file_fills if f["fill_key"] not in known_fill_keys]),
         "fills_known": len([f for f in file_fills if f["fill_key"] in known_fill_keys]),

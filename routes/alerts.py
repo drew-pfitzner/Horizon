@@ -18,7 +18,7 @@ import notify
 bp = Blueprint("alerts", __name__)
 
 _ALERT_SETTINGS = ("ntfy_server", "ntfy_topic", "alert_enabled", "alert_check_time",
-                   "alert_research_max_months")
+                   "alert_research_max_months", "alert_catchup_days")
 
 
 def _clean_signal(raw):
@@ -78,6 +78,7 @@ def get_settings():
         "alert_enabled": get_setting("alert_enabled", False),
         "alert_check_time": get_setting("alert_check_time", "16:20"),
         "alert_research_max_months": watch_sync.max_research_months(),
+        "alert_catchup_days": alert_job.catchup_days(),
         "signal": _clean_signal(get_setting("alert_signal", None)),
         "signal_defaults": dict(SIGNAL_DEFAULTS),
     }})
@@ -96,6 +97,13 @@ def put_settings():
             elif key == "alert_research_max_months":
                 try:
                     val = max(0, min(120, int(val)))
+                except (TypeError, ValueError):
+                    continue
+            elif key == "alert_catchup_days":
+                # Business days. 0 = only the most recent completed bar; 10 (two
+                # weeks of sessions) is already well past acting on a signal.
+                try:
+                    val = max(0, min(10, int(val)))
                 except (TypeError, ValueError):
                     continue
             set_setting(key, val)

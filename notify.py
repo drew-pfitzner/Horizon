@@ -12,6 +12,7 @@ HTTP header, which urllib encodes as latin-1:
     Held + BUY  -> "Horizon HELD ADD: AAPL"
     Held + SELL -> "Horizon HELD SELL: AAPL"
 """
+from datetime import datetime
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
@@ -68,8 +69,21 @@ def push(title, body, priority=None, tags=None):
         return False, str(e)
 
 
-def push_signal(bucket, kind, signal_dir, ticker, price, rsi=None, d=None):
-    """Build + send a signal push. Returns (ok, error, title, body)."""
+def bar_label(bar_date):
+    """'Thu 18 Sep' — enough to see which close a signal came from."""
+    try:
+        return datetime.strptime(bar_date, "%Y-%m-%d").strftime("%a %d %b")
+    except (TypeError, ValueError):
+        return None
+
+
+def push_signal(bucket, kind, signal_dir, ticker, price, rsi=None, d=None,
+                from_bar=None):
+    """Build + send a signal push. Returns (ok, error, title, body).
+
+    `from_bar` is the signal's bar date, passed only when that bar *isn't* the
+    most recent completed one — a catch-up push after the box was off. The body
+    then says which close it came from, so it can't be mistaken for today's."""
     action = action_for(bucket, signal_dir)
     title = build_title(bucket, action, ticker)
     parts = [f"@ {price:.2f}"] if price is not None else []
@@ -81,6 +95,9 @@ def push_signal(bucket, kind, signal_dir, ticker, price, rsi=None, d=None):
     if detail:
         parts.append(", ".join(detail))
     parts.append(f"({kind})")
+    label = bar_label(from_bar) if from_bar else None
+    if label:
+        parts.append(f"from {label} close")
     body = " · ".join(parts)
     tags = ["chart_with_upwards_trend"] if signal_dir == "BUY" else ["chart_with_downwards_trend"]
     ok, err = push(title, body, priority=(4 if signal_dir == "SELL" else 3), tags=tags)

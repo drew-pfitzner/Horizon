@@ -730,9 +730,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Market Check: where a fetched indicator came from, under its threshold hint. */
 .live-source { display: block; font-size: 0.78rem; opacity: 0.75; }
 
-/* Trades → Import: paste a broker statement, review the plan, apply it. */
-.import-csv { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
+/* Trades → Import: choose a broker statement, review the plan, apply it. */
 .import-file { cursor: pointer; display: inline-flex; align-items: center; }
+.import-drop { transition: border-color 0.15s, background 0.15s; }
+.import-drop.dragging { border-color: var(--accent); background: rgba(88, 166, 255, 0.06); }
+.import-filename { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
+.import-nav-opt { display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 0.5rem; cursor: pointer; }
+.import-nav-opt input { accent-color: var(--accent); }
 .import-result { border-left: 4px solid var(--green); }
 
 .import-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }

@@ -120,11 +120,14 @@ export const Alerts = {
     deliveryLabel(d) {
       if (d === "sent") return "alerted";
       if (d === "missed") return "never sent";
+      // Past the catch-up window — the next check won't push it either.
+      if (d === "stale") return "too old to push";
       return "next check";
     },
     deliveryClass(d) {
       if (d === "sent") return "text-muted";
       if (d === "missed") return "text-red";
+      if (d === "stale") return "text-muted";
       return "text-green";
     },
 

@@ -45,6 +45,41 @@ Transaction History,Data,2026-08-17,U***56746,ACCENTURE PLC-CL A,Buy,ACN,0.0048,
 Transaction History,Data,2026-08-15,U***56746,ACN(IE00B4BNMY34) Cash Dividend USD 1.63 per Share,Dividend,ACN,-,-,-,1.18,-,1.18
 """
 
+# A trimmed Activity Statement. Three things here that the Transaction History
+# report doesn't do: the Trades section changes columns partway down (a Stocks
+# block with 'Comm/Fee', then a Forex block with 'Comm in AUD'), the rows carry a
+# DataDiscriminator where only `Order` is a fill, and the statement states what
+# the account is worth.
+ACTIVITY = """Statement,Header,Field Name,Field Value
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"September 18, 2026"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Account,U23156746
+Account Information,Data,Base Currency,AUD
+Net Asset Value,Header,Asset Class,Prior Total,Current Long,Current Short,Current Total,Change
+Net Asset Value,Data,Cash ,5457.54096619,5363.819032505,0,5363.819032505,-93.721933685
+Net Asset Value,Data,Stock,761.39471,851.994675,0,851.994675,90.599965
+Net Asset Value,Data,Total,6219.39982119,6216.276862505,0,6216.276862505,-3.122958685
+Net Asset Value,Header,Time Weighted Rate of Return
+Net Asset Value,Data,-0.050213184%
+Change in NAV,Header,Field Name,Field Value
+Change in NAV,Data,Starting Value,6219.39982119
+Change in NAV,Data,Ending Value,6216.276862505
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Code
+Open Positions,Data,Summary,Stocks,USD,TJX,1.0197,1,131.725455526,134.320447,127.24,129.75,-4.570446,
+Open Positions,Total,,Stocks,USD,,,,,629.123948,,607.05,-22.073947,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Stocks,USD,TJX,"2026-09-18, 23:30:08",0.5205,126.79,127.24,-65.994195,-0.659943512,66.654138512,0,0.2342,O;RP
+Trades,Data,Order,Stocks,USD,QCOM,"2026-09-18, 23:31:11",-0.4,150.5,150.4,60.2,-0.602,0,15.696,0.04,C
+Trades,Data,SubTotal,Stocks,USD,QCOM,"2026-09-18, 23:31:11",-0.4,150.5,,60.2,-0.602,,,0.04,
+Trades,SubTotal,,Stocks,USD,TJX,,0.5205,,,-65.994195,-0.659943512,66.654138512,0,0.2342,
+Trades,Total,,Stocks,USD,,,,,,-65.994195,-0.659943512,66.654138512,0,0.2342,
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,,Proceeds,Comm in AUD,,,MTM in AUD,Code
+Trades,Data,Order,Forex,USD,AUD.USD,"2026-09-18, 23:30:09",-92.78,0.71119,,65.9842082,0,,,-0.171164,AFx
+Trades,Data,Order,Forex,USD,AUD.USD,"2026-09-19, 07:00:00",0.00594469,0.71273679,,-0.004237,0,,,-0.000002,
+Trades,SubTotal,,Forex,USD,AUD.USD,,-93.72193369,,,66.654138512,0,,,-0.172851,
+"""
+
 
 def _txn(rows, period=("August 1, 2026", "September 30, 2026")):
     """Build a Transaction History CSV from (date, desc, type, sym, qty, px, comm)."""
@@ -80,8 +115,8 @@ class ImporterTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         return r.get_json()["data"]
 
-    def apply(self, csv_text, resolutions=None, accept=None):
-        body = {"csv": csv_text, "resolutions": resolutions or {}}
+    def apply(self, csv_text, resolutions=None, accept=None, **extra):
+        body = {"csv": csv_text, "resolutions": resolutions or {}, **extra}
         if accept is not None:
             body["accept"] = accept
         r = self.client.post("/api/trades/import/apply", json=body)
@@ -122,6 +157,51 @@ class ImporterTest(unittest.TestCase):
         # A broker trade id becomes the fingerprint, which is the strongest
         # possible dedupe key.
         self.assertEqual(parsed["fills"][0]["fill_key"], "ibkr:tx:77771")
+
+    def test_reads_an_activity_statement(self):
+        parsed = imp.parse_csv(ACTIVITY)
+        # Only the `Order` rows of the Stocks block: the SubTotal/Total lines
+        # restate them, and the Forex legs aren't positions.
+        self.assertEqual([(f["ticker"], f["side"], f["qty"]) for f in parsed["fills"]],
+                         [("TJX", "BUY", 0.5205), ("QCOM", "SELL", 0.4)])
+        # The commission only comes out right if the Stocks block keeps its own
+        # header — the Forex block's 'Comm in AUD' sits in the same column.
+        self.assertAlmostEqual(parsed["fills"][0]["commission"], 0.659943512)
+        self.assertEqual(parsed["account"], "U23156746")
+        self.assertEqual(parsed["period"], {"start": "2026-09-18", "end": "2026-09-18"})
+        self.assertEqual(parsed["ignored"], {"Forex / cash": 2})
+
+    def test_an_activity_statement_carries_the_portfolio_value(self):
+        parsed = imp.parse_csv(ACTIVITY)
+        self.assertEqual(parsed["portfolio"], {
+            "value": 6216.276862505, "currency": "AUD", "as_of": "2026-09-18"})
+
+        plan = self.preview(ACTIVITY)
+        self.assertEqual(plan["portfolio"]["value"], 6216.276862505)
+        self.assertEqual(plan["portfolio"]["currency"], "AUD")
+        # The stored value rides along so the panel can show the change.
+        self.assertEqual(plan["portfolio"]["stored"]["value"], 0)
+        # Previewing writes nothing.
+        self.assertEqual(dbmod.get_setting("portfolio")["value"], 0)
+
+    def test_the_nav_falls_back_to_the_change_in_nav_section(self):
+        trimmed = "\n".join(l for l in ACTIVITY.splitlines()
+                            if not l.startswith("Net Asset Value")) + "\n"
+        self.assertEqual(imp.parse_csv(trimmed)["portfolio"]["value"], 6216.276862505)
+
+    def test_a_statement_without_a_nav_section_has_no_portfolio(self):
+        self.assertIsNone(imp.parse_csv(SAMPLE)["portfolio"])
+        self.assertIsNone(self.preview(SAMPLE)["portfolio"])
+
+    def test_applying_updates_the_portfolio_value_only_when_asked(self):
+        self.apply(ACTIVITY)
+        self.assertEqual(dbmod.get_setting("portfolio")["value"], 0)
+
+        result = self.apply(ACTIVITY, update_portfolio=True)
+        self.assertEqual(result["portfolio"]["value"], 6216.276862505)
+        stored = dbmod.get_setting("portfolio")
+        self.assertEqual(stored["value"], 6216.276862505)
+        self.assertEqual(stored["currency"], "AUD")
 
     def test_rejects_a_csv_with_no_trades(self):
         with self.assertRaises(imp.ImportError_):

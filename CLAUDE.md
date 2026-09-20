@@ -95,8 +95,8 @@ cd Horizon
 - Log entry (ticker, date, price, shares)
 - Log exit → auto-calculates ROI, P&L, win/loss
 - View historical trades + monthly performance
-- **Import** tab: paste an IBKR CSV and the log updates itself (see *Importing
-  from the broker* below)
+- **Import** tab: choose (or drop) an IBKR CSV and the log updates itself (see
+  *Importing from the broker* below)
 
 ### Smart Money
 - Search by ticker → see all gurus holding, weights, QoQ changes
@@ -151,7 +151,9 @@ docker compose down             # Stop
 - **Schedulers:** three daemon threads, all started in `app.py` behind the `WERKZEUG_RUN_MAIN` guard so the dev reloader doesn't double them — `alert_job` (daily signal check), `sm_job` (weekly 13F update), `market_data_job` (daily market-check fill). Each wakes at most hourly so a settings change lands without waiting out the full interval, and each catches up on boot if the box was off through its slot
 - **Alerts watch lists are derived** (`watch_sync.sync()`, run on every list read, check and "Signal now"): open trades → Held (kind from strategy), latest research per ticker with TRADE/INVEST → Buy (kind from decision), skipping research older than `alert_research_max_months` (default 6, 0 = no limit; set on the Alerts tab). Nothing is added/removed by hand. Dropped tickers are soft-deleted; one that returns after more than 7 days has its watermark cleared so it re-arms instead of pushing an old catch-up signal.
 - **Alerts dedupe:** each watch carries a `last_checked_bar` watermark; a ticker with a NULL watermark is *armed* at the current bar and fires nothing (no stale back-fill). Removing a watch is therefore a **soft delete** (`active = 0`) — a hard delete dropped the watermark, so remove/re-add re-armed the ticker and swallowed the signal in progress. Re-adding revives the same row.
-- **Alerts "Signal now"** (`GET /api/alerts/now` → `alert_job.current_state()`): read-only snapshot of every active watch at the latest closed bar, ignoring the watermark and sending nothing. Reports the edge on that bar plus the most recent signal in the 2y window, tagged `sent` / `missed` (watermark was already past it) / `pending`. Use it when an expected alert never arrived — a normal check can't tell you, since an armed or already-fired ticker is silent by design. Network-bound (parallel price fetches), so it's an explicit button, not on mount.
+- **Alerts catch-up window** (`alert_catchup_days`, default 2, set on the Alerts settings card): for boxes that aren't on 24/7. The boot run already evaluates every bar past the watermark, but unbounded that means a machine off for a month pushes a month-old edge. A signal more than N **US business days** older than the latest completed bar is logged as `stale` and skipped, and the watermark still advances so it never resurfaces. Weekends don't age a signal — a Friday close is one business day old on Monday, which is the case this exists for; market holidays do count (erring toward "too old" beats pushing something you can't act on). `0` = only the most recent completed bar. A catch-up push that isn't from the latest bar carries `· from Fri 11 Sep close` in the body so it can't be read as today's.
+- **Alerts never double-send:** beyond the watermark, every push is checked against `alert_log` for an existing `ok = 1` row on the same (ticker, `bar_date`, `signal_dir`). The watermark normally makes a repeat impossible, but it can be lost — watch_sync clears it when a dropped ticker returns after a week, a restored backup can be behind — and `alert_log` is the record of what the phone actually received, so it gets the last word.
+- **Alerts "Signal now"** (`GET /api/alerts/now` → `alert_job.current_state()`): read-only snapshot of every active watch at the latest closed bar, ignoring the watermark and sending nothing. Reports the edge on that bar plus the most recent signal in the 2y window, tagged `sent` / `missed` (watermark was already past it) / `stale` (older than the catch-up window, so the next check would skip it too) / `pending`, with `business_days_old`. Use it when an expected alert never arrived — a normal check can't tell you, since an armed or already-fired ticker is silent by design. Network-bound (parallel price fetches), so it's an explicit button, not on mount.
 
 ## Maintenance Notes
 
@@ -162,9 +164,11 @@ docker compose down             # Stop
 
 ## Importing from the broker (`ibkr_import.py`, `routes/trade_import.py`)
 
-Trades → **Import**: paste an IBKR CSV, look at what it would change, apply it.
-Nothing is written until you press Apply, and every row is shown with its
-before → after before you do.
+Trades → **Import**: choose an IBKR CSV (or drop it on the panel), look at what
+it would change, apply it. Nothing is written until you press Apply, and every
+row is shown with its before → after before you do. The panel is deliberately
+bare — a file picker and the plan; there is no paste box and no preamble, because
+the only thing it ever needs is the file.
 
 **The shape problem.** `trades` is one row per *position* — a single entry price,
 a single share count, one optional exit. IBKR's CSV is one row per *fill*: a $100
@@ -227,19 +231,42 @@ which makes the dedupe exact rather than fingerprint-based, plus
 a wide date range ("Last 365 days") and most of the ambiguity above disappears,
 because the file itself says what you were holding before the window opened.
 Activity Statement exports parse too — the parser matches columns by alias, not
-position, so the three layouts all land in the same place.
+position, so the three layouts all land in the same place. One wrinkle they
+forced: a single section can change its columns partway down (the Trades section
+emits a Stocks block with `Comm/Fee`, then a Forex block with `Comm in AUD`), so
+`_split_sections` returns a **list of (header, rows) blocks per section**, each
+read with its own column map. Folding them onto one header silently mis-read the
+commission of every stock fill — it fell back to the `commission_pct` estimate
+and looked plausible. `DataDiscriminator` is honoured too: only `Order` rows are
+fills, never the SubTotal/Total restatements.
 
-**If an import gets a position wrong**, delete the row in the trade log and paste
+**Portfolio value.** An Activity Statement also states what the account is worth,
+and the position-size maths needs that number. `_portfolio_from_statement()` reads
+Net Asset Value → the `Total` row's **Current Total**, with the base currency from
+Account Information (falling back to Change in NAV's `Ending Value`), and hangs it
+on the plan as `portfolio = {value, currency, as_of, stored}`. The panel shows it
+next to the value currently stored with an **Update on apply** tick (on by
+default); it's written by `_save_portfolio()` on Apply only, before the trade rows,
+so new positions size against the NAV the statement describes. Transaction History
+and Flex Query files say nothing about account value, so no card appears. A file
+whose trades are all already imported can still push just the NAV, via a button on
+the "Nothing to do" card.
+
+**If an import gets a position wrong**, delete the row in the trade log and import
 the file again. Deleting cascades the row's fills out of the ledger, so the next
 import sees them as new and rebuilds the position from scratch. Editing a row by
 hand also works, but the next CSV that touches that position will re-derive the
 columns the importer owns (entry/exit dates, prices, share count, fees) — notes,
 strategy and sector are never overwritten.
 
-**Tests**: `venv/bin/python -m unittest discover -s tests -t .` — 19 cases
-covering re-imports, overlapping windows, both import orders, scale-ins,
-sell-outs, partial exits in both shapes, adoption of hand-logged rows,
-delete-and-rebuild, and each question.
+**Tests**: `venv/bin/python -m unittest discover -s tests -t .` — 33 cases across
+the importer and the alert catch-up. The importer's cover re-imports, overlapping
+windows, both import orders, scale-ins, sell-outs, partial exits in both shapes,
+adoption of hand-logged rows, delete-and-rebuild, each question, and the Activity
+Statement (Order rows only, per-block commissions, NAV extraction and its
+fallback). `tests/test_signal_catchup.py` covers the alert window: a weekend-old
+signal pushed, an out-of-window one skipped with the watermark still advancing, a
+duplicate refused, and a failed send left to retry.
 
 ## Live market data (`market_data.py`)
 

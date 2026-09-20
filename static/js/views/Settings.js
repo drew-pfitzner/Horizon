@@ -45,7 +45,7 @@ export const Settings = {
       refreshingFx: false,
       fxMessage: null,
       fxMessageClass: "",
-      ntfy: { ntfy_server: "https://ntfy.sh", ntfy_topic: "", alert_enabled: false, alert_check_time: "16:20" },
+      ntfy: { ntfy_server: "https://ntfy.sh", ntfy_topic: "", alert_enabled: false, alert_check_time: "16:20", alert_catchup_days: 2 },
       savingNtfy: false,
       testingNtfy: false,
       ntfyMessage: null,
@@ -443,6 +443,7 @@ export const Settings = {
         this.ntfy = {
           ntfy_server: s.ntfy_server, ntfy_topic: s.ntfy_topic,
           alert_enabled: s.alert_enabled, alert_check_time: s.alert_check_time,
+          alert_catchup_days: s.alert_catchup_days,
         };
       } catch (e) { console.error(e); }
     },
@@ -726,6 +727,14 @@ export const Settings = {
           <div class="field">
             <label>Daily check time (US/Eastern)</label>
             <input type="text" v-model="ntfy.alert_check_time" placeholder="16:20" style="max-width: 8rem;">
+          </div>
+          <div class="field">
+            <label>Catch-up window (business days)</label>
+            <input type="number" min="0" max="10" v-model.number="ntfy.alert_catchup_days" style="max-width: 8rem;">
+            <span class="text-muted live-source">
+              When the server was off, push signals up to this many business days old once it's back.
+              Weekends don't count, so Friday's signal still arrives Monday. 0 = only the latest close.
+            </span>
           </div>
         </div>
         <label class="check-inline">

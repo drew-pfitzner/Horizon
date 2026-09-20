@@ -1,7 +1,9 @@
 """Alert scheduler — evaluates watched tickers and pushes buy/sell signals.
 
 Design goals (see ALERTS_PLAN.md):
-  * Works end-of-day AND catches up on startup/resume (non-24/7 boxes).
+  * Works end-of-day AND catches up on startup/resume (non-24/7 boxes), but the
+    catch-up is bounded: a signal older than `alert_catchup_days` US business
+    days is dropped rather than pushed (see catchup_days()).
   * ET-aware: the container clock is UTC, so the daily close and check time are
     computed in US/Eastern, and today's in-progress bar is dropped until close.
   * Bar-date dedupe: a signal fires at most once per (ticker, direction); stored
@@ -13,7 +15,7 @@ Reuses the sm_job background-thread + ring-buffer pattern.
 import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from db import get_db, get_setting
@@ -24,6 +26,7 @@ import watch_sync
 
 ET = ZoneInfo("America/New_York")
 MARKET_CLOSE_HOUR = 16  # 4pm ET; today's bar isn't final before this
+DEFAULT_CATCHUP_DAYS = 2  # US business days; see catchup_days()
 _MAX_LOG_LINES = 200
 _SNAPSHOT_WORKERS = 6  # parallel price fetches for the read-only snapshot
 
@@ -81,6 +84,51 @@ def _completed_bars(bars, now_et):
     return bars
 
 
+def catchup_days():
+    """How many US business days old a signal may be and still be pushed.
+
+    A box that isn't on 24/7 comes back to a watermark that's days behind, and
+    the catch-up run would otherwise push whatever it finds there — a
+    three-month-old edge included. 0 = only the most recent completed bar."""
+    try:
+        return max(0, int(get_setting("alert_catchup_days", DEFAULT_CATCHUP_DAYS)))
+    except (TypeError, ValueError):
+        return DEFAULT_CATCHUP_DAYS
+
+
+def _business_days_between(start, end):
+    """Mon-Fri days after `start` up to and including `end` (ISO date strings).
+
+    Weekends don't age a signal — a Friday close is still one business day old
+    on Monday, which is the whole point of measuring the window this way. Market
+    holidays do count: erring toward "too old" beats pushing a signal the user
+    can no longer act on."""
+    try:
+        a, b = date.fromisoformat(start), date.fromisoformat(end)
+    except (TypeError, ValueError):
+        return 0
+    days = 0
+    while a < b:
+        a += timedelta(days=1)
+        if a.weekday() < 5:
+            days += 1
+    return days
+
+
+def _already_sent(db, ticker, bar_date, direction):
+    """True if this exact (ticker, bar, direction) push already succeeded.
+
+    The watermark normally makes a repeat impossible, but it can be lost:
+    watch_sync clears it when a dropped ticker returns after a week, a restored
+    backup can be behind, and two runs could in principle race. alert_log is the
+    record of what the phone actually received, so it gets the last word."""
+    return db.execute(
+        "SELECT 1 FROM alert_log WHERE ticker = ? AND bar_date = ? "
+        "AND signal_dir = ? AND ok = 1 LIMIT 1",
+        (ticker, bar_date, direction),
+    ).fetchone() is not None
+
+
 def _set_checked(db, ticker, bar_date):
     """Advance the per-ticker watermark to the latest evaluated bar."""
     db.execute(
@@ -109,6 +157,7 @@ def run_checks():
          finished_at=None, error=None)
     now_et = datetime.now(ET)
     signal_params = get_setting("alert_signal", None)
+    max_age = catchup_days()
     fired, failed, checked = 0, 0, 0
     try:
         watch_sync.sync()
@@ -159,10 +208,26 @@ def run_checks():
                     if not hits:
                         continue
                     sig = hits[-1]  # only the latest edge in the window
+                    action = "ADD" if (bucket == "HELD" and direction == "BUY") else direction
+                    age = _business_days_between(sig["date"], latest_bar)
+
+                    # Past the catch-up window: too old to act on, so note it and
+                    # send nothing. The watermark still advances below, which is
+                    # what stops it resurfacing on every later run.
+                    if age > max_age:
+                        _append(f"{ticker}: {action} @ {sig['date']} — stale "
+                                f"({age} business day{'' if age == 1 else 's'} old), skipped")
+                        continue
+
+                    # Belt and braces over the watermark — see _already_sent().
+                    if _already_sent(db, ticker, sig["date"], direction):
+                        _append(f"{ticker}: {action} @ {sig['date']} — already sent, skipped")
+                        continue
+
                     ok, err, title, body = push_signal(
                         bucket, kind, direction, ticker, sig["close"],
-                        rsi=sig["rsi"], d=sig["d"])
-                    action = "ADD" if (bucket == "HELD" and direction == "BUY") else direction
+                        rsi=sig["rsi"], d=sig["d"],
+                        from_bar=sig["date"] if age else None)
                     _log(db, ticker=ticker, bucket=bucket, action=action,
                          direction=direction, kind=kind, bar_date=sig["date"],
                          price=sig["close"], message=f"{title} — {body}",
@@ -220,6 +285,7 @@ def current_state():
     """
     now_et = datetime.now(ET)
     signal_params = get_setting("alert_signal", None)
+    max_age = catchup_days()
     watch_sync.sync()
     with get_db() as db:
         watches = [dict(r) for r in db.execute(
@@ -263,10 +329,17 @@ def current_state():
         if last:
             last["action"] = action_for(w["bucket"], last["direction"])
             key = (w["ticker"], last["date"], last["direction"])
+            # How many business days behind the latest bar it is — the same
+            # measure the catch-up window uses, so "stale" here means the next
+            # check would skip it too.
+            last["business_days_old"] = _business_days_between(
+                last["date"], latest["date"])
             if key in delivered:
                 last["delivery"] = "sent"
             elif w["last_checked_bar"] and last["date"] <= w["last_checked_bar"]:
                 last["delivery"] = "missed"
+            elif last["business_days_old"] > max_age:
+                last["delivery"] = "stale"
             else:
                 last["delivery"] = "pending"
             row["last_signal"] = last

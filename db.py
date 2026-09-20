@@ -24,6 +24,11 @@ DEFAULT_SETTINGS = {
     "ntfy_topic": "",            # empty = alerts disabled until set (use a long random topic)
     "alert_enabled": False,
     "alert_check_time": "16:20",  # US/Eastern; shortly after the 4pm close
+    # Catch-up window, in US business days: how old a signal may be and still be
+    # pushed when the box comes back online after being off. 0 = only the most
+    # recent completed bar. Weekends don't count, so a Friday signal is still
+    # fresh on Monday.
+    "alert_catchup_days": 2,
     # Signal thresholds — mirror the TradingView "Horizon Signal" inputs so alerts
     # match the chart.
     "alert_signal": dict(SIGNAL_DEFAULTS),
