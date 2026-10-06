@@ -483,6 +483,61 @@ class ImporterTest(unittest.TestCase):
         self.apply(SAMPLE, resolutions=nflx)
         self.assertAlmostEqual(self.trades()["DECK"]["shares"], 0.8314, places=6)
 
+    # -- the IBKR connector's CSV -------------------------------------------
+
+    CONNECTOR = (
+        "trade_id,trade_time,symbol,company_name,sec_type,side,size,price,commission,currency\n"
+        "00012968.6aa80517.01.01,2026-09-14T13:30:15Z,DECK,DECKERS OUTDOOR CORP,STK,BUY,0.8276,80.585,0.66692394,USD\n"
+        "00012968.6aa805d9.01.01,2026-09-14T13:30:15Z,DECK,DECKERS OUTDOOR CORP,STK,BUY,0.0038,80.95,0.00307611,USD\n"
+        "0000d5db.6e7bd506.01.01,2026-09-14T13:30:15Z,AUD.USD,Australian dollar,CASH,SELL,93.11,0.71089,0,USD\n"
+    )
+
+    def test_reads_the_connector_csv(self):
+        parsed = imp.parse_csv(self.CONNECTOR)
+        self.assertEqual([(f["ticker"], f["side"], f["qty"], f["price"]) for f in parsed["fills"]],
+                         [("DECK", "BUY", 0.8276, 80.585), ("DECK", "BUY", 0.0038, 80.95)])
+        self.assertEqual(parsed["fills"][0]["trade_date"], "2026-09-14")
+        self.assertEqual(parsed["fills"][0]["description"], "DECKERS OUTDOOR CORP")
+        self.assertAlmostEqual(parsed["fills"][0]["commission"], 0.66692394)
+        self.assertEqual(parsed["ignored"], {"Forex / cash": 1})
+
+    def test_a_utc_stamp_is_dated_by_the_new_york_session(self):
+        # 00:30 UTC on the 15th is 20:30 on the 14th in New York — after-hours
+        # on the 14th, not a trade on the 15th.
+        self.assertEqual(imp._parse_date("2026-09-15T00:30:00Z"), "2026-09-14")
+        self.assertEqual(imp._parse_date("2026-09-14T13:30:15Z"), "2026-09-14")
+        self.assertEqual(imp._parse_date("2026-09-14T09:30:00"), "2026-09-14")
+
+    def _deck_txn(self):
+        return _txn([
+            ("2026-09-14", "DECKERS OUTDOOR CORP", "Buy", "DECK", "0.8276", "80.585", "-0.66692394"),
+            ("2026-09-14", "DECKERS OUTDOOR CORP", "Buy", "DECK", "0.0038", "80.95", "-0.00307611"),
+        ])
+
+    def test_connector_then_statement_does_not_double_count(self):
+        self.apply(self.CONNECTOR)
+        plan = self.preview(self._deck_txn())
+        self.assertEqual((plan["fills_new"], plan["fills_known"]), (0, 2))
+        self.apply(self._deck_txn())
+        self.assertEqual(len(self.all_trades()), 1)
+        self.assertAlmostEqual(self.trades()["DECK"]["shares"], 0.8314)
+
+    def test_statement_then_connector_does_not_double_count(self):
+        self.apply(self._deck_txn())
+        plan = self.preview(self.CONNECTOR)
+        self.assertEqual((plan["fills_new"], plan["fills_known"]), (0, 2))
+        self.apply(self.CONNECTOR)
+        self.assertAlmostEqual(self.trades()["DECK"]["shares"], 0.8314)
+
+    def test_a_genuinely_new_fill_still_lands_across_sources(self):
+        self.apply(self._deck_txn())
+        more = self.CONNECTOR + ("00012968.6ab00000.01.01,2026-09-16T13:30:02Z,DECK,"
+                                 "DECKERS OUTDOOR CORP,STK,BUY,0.5,82.00,0.41,USD\n")
+        plan = self.preview(more)
+        self.assertEqual((plan["fills_new"], plan["fills_known"]), (1, 2))
+        self.apply(more)
+        self.assertAlmostEqual(self.trades()["DECK"]["shares"], 1.3314)
+
     # -- selective apply --------------------------------------------------
 
     def test_accept_list_limits_what_is_written(self):

@@ -39,6 +39,7 @@ import io
 import re
 from collections import defaultdict
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 # Share quantities are fractional and arrive as float text, so "flat" has to be
 # a tolerance rather than == 0.
@@ -68,16 +69,16 @@ def _norm_key(s):
 
 # Candidate header names per field, most specific first.
 _FIELD_ALIASES = {
-    "date":       ["tradedate", "datetime", "date", "reportdate", "settledate"],
+    "date":       ["tradedate", "datetime", "date", "tradetime", "reportdate", "settledate"],
     "symbol":     ["symbol", "ticker", "underlyingsymbol"],
-    "qty":        ["quantity", "qty", "shares"],
+    "qty":        ["quantity", "qty", "shares", "size"],
     "price":      ["tradeprice", "tprice", "price", "priceperunit"],
     "currency":   ["pricecurrency", "currencyprimary", "currency"],
     "commission": ["ibcommission", "commission", "commfee", "commissionandtax", "fee"],
-    "side":       ["buysell", "transactiontype", "type", "activitycode"],
-    "desc":       ["description", "securitydescription", "listingexchangedescription"],
+    "side":       ["buysell", "side", "transactiontype", "type", "activitycode"],
+    "desc":       ["companyname", "description", "securitydescription", "listingexchangedescription"],
     "txid":       ["transactionid", "tradeid", "ibexecid", "executionid"],
-    "asset":      ["assetcategory", "assetclass"],
+    "asset":      ["assetcategory", "assetclass", "sectype"],
 }
 
 
@@ -110,6 +111,13 @@ def _num(raw):
         return None
 
 
+# A fill's date is the US trading session it happened in. The IBKR connector
+# stamps fills in UTC ('2026-10-05T13:30:12Z'), and an after-hours fill is
+# already tomorrow in UTC, so timestamps carrying a zone are moved to New York
+# before the date is taken.
+_MARKET_TZ = ZoneInfo("America/New_York")
+_ISO_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T")
+
 _DATE_PATTERNS = ["%Y-%m-%d", "%Y%m%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d",
                   "%B %d, %Y", "%b %d, %Y"]
 
@@ -125,6 +133,14 @@ def _parse_date(raw):
     s = (raw or "").strip().strip('"')
     if not s or s.lower() in _EMPTY:
         return None
+    if _ISO_STAMP.match(s):
+        try:
+            stamp = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            return _parse_date(s[:10])
+        if stamp.tzinfo is not None:
+            stamp = stamp.astimezone(_MARKET_TZ)
+        return stamp.date().isoformat()
     candidates = [s]
     # "2026-09-14, 09:30:00" / "20260914;093000" / "2026-09-14 09:30"
     for sep in (",", ";", " "):
@@ -614,6 +630,37 @@ def _superseding_fills(baseline, file_fills):
     return same_day
 
 
+def _same_fill(a, b):
+    return (a["ticker"] == b["ticker"] and a["trade_date"] == b["trade_date"]
+            and a["side"] == b["side"] and _qty_close(a["qty"], b["qty"])
+            and abs(a["price"] - b["price"]) <= max(0.005, abs(b["price"]) * 1e-4))
+
+
+def _match_ledger_keys(file_fills, ledger_fills, known_fill_keys):
+    """Recognise a fill the ledger already holds under a different fingerprint.
+
+    The same execution can arrive keyed two ways: by the broker's id (the IBKR
+    connector, a Flex Query) or by its economics (Transaction History, an
+    Activity Statement, which carry no id). Swapping between them would log
+    every fill twice. So a file fill whose key is new is matched against the
+    ledger's fills — same ticker, day, side, quantity and price — that this
+    file doesn't already account for, and if one fits, the fill takes the
+    ledger's key and counts as already imported. One ledger fill matches at
+    most one file fill, so two genuinely identical fills stay two.
+    """
+    file_keys = {f["fill_key"] for f in file_fills}
+    spare = [l for l in ledger_fills
+             if l.get("source") == "ibkr" and l["fill_key"] not in file_keys]
+    for f in file_fills:
+        if f["fill_key"] in known_fill_keys:
+            continue
+        for l in spare:
+            if _same_fill(f, l):
+                f["fill_key"] = l["fill_key"]
+                spare.remove(l)
+                break
+
+
 # ----------------------------------------------------------------- planner ---
 
 _COMPARE_FIELDS = [
@@ -655,6 +702,7 @@ def build_plan(parsed, existing_trades, known_fill_keys, commission_pct=1.0,
     resolutions = resolutions or {}
     file_fills = parsed["fills"]
     period = parsed["period"]
+    _match_ledger_keys(file_fills, parsed.get("ledger_fills", []), known_fill_keys)
 
     by_ticker = defaultdict(list)
     for f in file_fills:

@@ -1,11 +1,30 @@
 // Statement-file import for the trade log.
 //
+// Two ways in, same pipeline: choose/drop an IBKR file, or paste CSV text (the
+// table Claude builds from the IBKR connector). Either way it becomes `csv`.
+//
 // The panel never computes anything itself: it reads the chosen file, posts it
 // to /preview, shows the plan the server built, and posts the same text back to
 // /apply with the answers attached. Changing an answer re-previews, so what's on
 // screen is always a plan the server just produced rather than one patched up in
 // the browser.
 import { post, fmtDate, fmtMoney, fmtShares } from "../utils.js";
+
+// What to ask Claude (with the IBKR connector on) for a paste-ready table. The
+// column names are the connector's own, so the parser maps them by alias.
+export const CLAUDE_PROMPT = `Using the Interactive Brokers connector, call get_account_trades with period DAYS_90 and give me the result as one CSV code block I can copy — nothing else.
+
+Header row, exactly:
+trade_id,trade_time,symbol,company_name,sec_type,side,size,price,commission,currency
+
+Rules:
+- One row per fill exactly as returned. Don't merge, total or round anything.
+- Only rows where sec_type is STK (leave out CASH / forex legs).
+- price = the raw "price" field, not "formatted_price".
+- size and commission as positive numbers; side is BUY or SELL.
+- trade_time exactly as returned (UTC, e.g. 2026-10-05T13:30:12Z).
+- Wrap company_name in double quotes.
+- If there are no stock trades, just say so.`;
 
 const FIELD_LABELS = {
   entry_date: "Entry date", entry_price: "Entry price", shares: "Shares",
@@ -20,6 +39,9 @@ export const TradeImport = {
       csv: "",
       fileName: "",
       dragging: false,
+      pasting: false,          // the paste box is open
+      pasted: "",
+      promptCopied: false,
       updatePortfolio: true,   // the statement's NAV replaces the stored one
       plan: null,
       resolutions: {},   // action key -> { mode, entry_date, entry_price }
@@ -98,8 +120,35 @@ export const TradeImport = {
       reader.readAsText(file);
     },
 
+    // navigator.clipboard only exists on https/localhost; over Tailscale's
+    // plain http it's undefined, so fall back to the old select-and-copy.
+    async copyPrompt() {
+      try {
+        await navigator.clipboard.writeText(CLAUDE_PROMPT);
+      } catch (_) {
+        const ta = document.createElement("textarea");
+        ta.value = CLAUDE_PROMPT;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      }
+      this.promptCopied = true;
+      setTimeout(() => { this.promptCopied = false; }, 2000);
+    },
+
+    usePasted() {
+      if (!this.pasted.trim()) { this.error = "Paste the CSV first."; return; }
+      this.csv = this.pasted;
+      this.fileName = "Pasted CSV";
+      this.pasting = false;
+      this.preview();
+    },
+
     async preview() {
-      if (!this.csv.trim()) { this.error = "Choose a CSV file."; return; }
+      if (!this.csv.trim()) { this.error = "Choose or paste a CSV."; return; }
       this.loading = true;
       this.error = null;
       this.result = null;
@@ -158,7 +207,7 @@ export const TradeImport = {
 
     reset() {
       Object.assign(this, {
-        csv: "", fileName: "", plan: null, resolutions: {}, accepted: {},
+        csv: "", fileName: "", pasting: false, pasted: "", plan: null, resolutions: {}, accepted: {},
         strategies: {}, expanded: {}, error: null, result: null,
         updatePortfolio: true,
       });
@@ -188,10 +237,29 @@ export const TradeImport = {
             {{ loading ? 'Reading…' : 'Choose a CSV file…' }}
             <input type="file" accept=".csv,text/csv" ref="file" @change="onFile" hidden>
           </label>
+          <button class="btn-ghost" @click="pasting = !pasting">
+            {{ pasting ? 'Cancel paste' : 'Paste CSV' }}
+          </button>
           <span v-if="fileName" class="import-filename">{{ fileName }}</span>
-          <span v-else class="text-muted" style="font-size:.8rem;">or drop it here</span>
+          <span v-else class="text-muted" style="font-size:.8rem;">or drop a file here</span>
           <div class="spacer"></div>
-          <button class="btn-ghost" v-if="plan || csv" @click="reset">Clear</button>
+          <button class="btn-ghost" v-if="plan || csv || pasted" @click="reset">Clear</button>
+        </div>
+
+        <div v-if="pasting" style="margin-top:.6rem;">
+          <textarea v-model="pasted" rows="8" spellcheck="false"
+                    placeholder="trade_id,trade_time,symbol,company_name,sec_type,side,size,price,commission,currency"
+                    style="width:100%; font-family:monospace; font-size:.78rem;"></textarea>
+          <div class="toolbar" style="margin-top:.4rem;">
+            <button class="btn-primary" :disabled="loading" @click="usePasted">
+              {{ loading ? 'Reading…' : 'Preview' }}
+            </button>
+            <div class="spacer"></div>
+            <button class="btn-ghost" @click="copyPrompt"
+                    title="The prompt to give Claude (IBKR connector on) for this CSV">
+              {{ promptCopied ? 'Copied ✓' : 'Copy Claude prompt' }}
+            </button>
+          </div>
         </div>
 
         <div v-if="error" class="text-red" style="margin-top:.5rem;">{{ error }}</div>

@@ -196,11 +196,27 @@ docker compose down             # Stop
 
 ## Importing from the broker (`ibkr_import.py`, `routes/trade_import.py`)
 
-Trades → **Import**: choose an IBKR CSV (or drop it on the panel), look at what
-it would change, apply it. Nothing is written until you press Apply, and every
-row is shown with its before → after before you do. The panel is deliberately
-bare — a file picker and the plan; there is no paste box and no preamble, because
-the only thing it ever needs is the file.
+Trades → **Import**: choose an IBKR CSV (or drop it on the panel), or **Paste
+CSV**, look at what it would change, apply it. Nothing is written until you press
+Apply, and every row is shown with its before → after before you do.
+
+**Paste route (IBKR connector).** The paste box has a **Copy Claude prompt**
+button (`CLAUDE_PROMPT` in `TradeImport.js`): it asks Claude, with the IBKR
+connector on, to run `get_account_trades` (DAYS_90) and return one CSV block with
+the connector's own column names — `trade_id,trade_time,symbol,company_name,
+sec_type,side,size,price,commission,currency`. The parser maps those by alias
+(`size`→qty, `sec_type`→asset, `trade_time`→date). `trade_time` is UTC; ISO stamps
+with a zone are converted to New York before the date is taken, so an
+after-hours fill stays on its session day. The copy falls back to
+`execCommand("copy")` because `navigator.clipboard` doesn't exist over
+Tailscale's plain http.
+
+**Mixing sources.** The connector keys fills by exec id; Transaction History and
+Activity Statements carry no id and key by economics. `_match_ledger_keys()`
+bridges them: a file fill with an unseen key that matches a ledger fill on
+ticker/day/side/qty/price (±0.005 or 0.01%) takes the ledger's key and counts as
+already imported, one-to-one so identical fills stay distinct. Without it,
+alternating file and paste would log every fill twice.
 
 **The shape problem.** `trades` is one row per *position* — a single entry price,
 a single share count, one optional exit. IBKR's CSV is one row per *fill*: a $100
@@ -291,7 +307,7 @@ hand also works, but the next CSV that touches that position will re-derive the
 columns the importer owns (entry/exit dates, prices, share count, fees) — notes,
 strategy and sector are never overwritten.
 
-**Tests**: `venv/bin/python -m unittest discover -s tests -t .` — 33 cases across
+**Tests**: `venv/bin/python -m unittest discover -s tests -t .` — 38 cases across
 the importer and the alert catch-up. The importer's cover re-imports, overlapping
 windows, both import orders, scale-ins, sell-outs, partial exits in both shapes,
 adoption of hand-logged rows, delete-and-rebuild, each question, and the Activity
