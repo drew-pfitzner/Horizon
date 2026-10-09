@@ -59,6 +59,10 @@ export const Settings = {
       savingMcAuto: false,
       mcAutoMessage: null,
       mcAutoMessageClass: "",
+      autoUpdate: { enabled: true, time: "11:00", next_run: null, last_check: null, last_result: null },
+      savingAutoUpdate: false,
+      autoUpdateMessage: null,
+      autoUpdateMessageClass: "",
     };
   },
   async mounted() {
@@ -239,6 +243,25 @@ export const Settings = {
       } catch (e) {
         this.sysInfo = { git_available: false, message: `Error: ${e.message}` };
       }
+      try { this.autoUpdate = await get("/api/system/auto-update"); } catch (e) { console.error(e); }
+    },
+    async saveAutoUpdate() {
+      this.savingAutoUpdate = true;
+      this.autoUpdateMessage = null;
+      try {
+        this.autoUpdate = await put("/api/system/auto-update", {
+          enabled: this.autoUpdate.enabled,
+          time: this.autoUpdate.time,
+        });
+        this.autoUpdateMessage = "Saved";
+        this.autoUpdateMessageClass = "text-green";
+      } catch (e) {
+        this.autoUpdateMessage = `Error: ${e.message}`;
+        this.autoUpdateMessageClass = "text-red";
+      } finally {
+        this.savingAutoUpdate = false;
+        setTimeout(() => { this.autoUpdateMessage = null; }, 3000);
+      }
     },
     async checkForUpdate() {
       this.checkingUpdate = true;
@@ -270,8 +293,8 @@ export const Settings = {
           this.updating = false;
           return;
         }
-        const note = result.deps_changed
-          ? " (requirements.txt changed — run update.sh from host to fully rebuild)"
+        const note = result.deps_error
+          ? " (new dependencies failed to install — run update.sh from host to rebuild)"
           : result.image_changed
             ? " (Dockerfile/compose changed — run update.sh from host to rebuild)"
             : "";
@@ -589,6 +612,32 @@ export const Settings = {
               {{ updating ? "Updating…" : (sysInfo.behind ? "Update & Restart" : "Up to date") }}
             </button>
             <span :class="sysMessageClass">{{ sysMessage }}</span>
+          </div>
+
+          <h4 style="margin-top: 1.25rem;">Nightly auto-update</h4>
+          <p class="text-muted" style="font-size: 0.85rem;">
+            Checks once a day and, if there's a new version, updates and restarts on its own —
+            the same as pressing Update &amp; Restart. It waits if an alert check or data fetch is
+            running, and catches up at startup if the machine was off.
+          </p>
+          <div class="settings-fields">
+            <div class="field">
+              <label>Time (US/Eastern)</label>
+              <input type="text" v-model="autoUpdate.time" placeholder="11:00" style="max-width: 8rem;">
+            </div>
+          </div>
+          <label class="check-inline">
+            <input type="checkbox" v-model="autoUpdate.enabled"> Nightly auto-update enabled
+          </label>
+          <p class="text-muted" style="font-size: 0.85rem;">
+            <template v-if="autoUpdate.enabled">Next check {{ fmtDateTime(autoUpdate.next_run) }}</template>
+            <template v-if="autoUpdate.last_check"><template v-if="autoUpdate.enabled"> · </template>last checked {{ fmtDateTime(autoUpdate.last_check) }} — {{ autoUpdate.last_result }}</template>
+          </p>
+          <div class="toolbar">
+            <button class="btn-primary" :disabled="savingAutoUpdate" @click="saveAutoUpdate">
+              {{ savingAutoUpdate ? "Saving…" : "Save" }}
+            </button>
+            <span :class="autoUpdateMessageClass">{{ autoUpdateMessage }}</span>
           </div>
         </div>
       </div>

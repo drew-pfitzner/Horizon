@@ -55,4 +55,6 @@ if __name__ == "__main__":
         alert_job.start_scheduler()
         sm_job.start_scheduler()            # weekly 13F refresh
         market_data_job.start_scheduler()   # daily market-check auto-fill
+        import update_job
+        update_job.start_scheduler()        # nightly pull + restart
     app.run(host="0.0.0.0", port=PORT, debug=debug, use_reloader=debug)

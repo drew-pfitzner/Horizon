@@ -5,7 +5,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 
 bp = Blueprint("system", __name__)
@@ -133,57 +133,104 @@ def _delayed_restart():
         os._exit(0)
 
 
-@bp.route("/update", methods=["POST"])
-def update():
+def _install_deps():
+    """Install requirements.txt into the running interpreter. Returns (ok, err).
+
+    Without this, a pull that adds a dependency restarts straight into an
+    ImportError — survivable when you pressed the button, not at 2am."""
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "-r",
+             str(REPO_ROOT / "requirements.txt")],
+            capture_output=True, text=True, timeout=600,
+        )
+    except Exception as e:
+        return False, str(e)
+    return r.returncode == 0, (r.stderr or r.stdout).strip()[-500:]
+
+
+def pull_and_restart():
+    """Fast-forward to upstream and, if anything changed, restart into it.
+
+    Shared by the Settings button and the nightly update_job. Returns
+    (ok, data_or_error); when new commits landed, the restart is already
+    scheduled by the time this returns."""
     if not _git_available():
-        return jsonify({"success": False, "error": "Not a git checkout"}), 400
+        return False, "Not a git checkout"
     _, dirty, _ = _git("status", "--porcelain")
     if dirty:
-        return jsonify({
-            "success": False,
-            "error": "Working tree has uncommitted changes; refusing to pull. Commit or stash first.",
-        }), 400
+        return False, "Working tree has uncommitted changes; refusing to pull. Commit or stash first."
 
     _, before, _ = _git("rev-parse", "HEAD")
     rc, out, err = _git("pull", "--ff-only", timeout=180)
     if rc != 0:
-        return jsonify({"success": False, "error": f"git pull failed: {err or out}"}), 500
+        return False, f"git pull failed: {err or out}"
     _, after, _ = _git("rev-parse", "HEAD")
 
-    changed = []
-    deps_changed = False
-    image_changed = False
-    if before != after:
-        rc2, files, _ = _git("diff", "--name-only", f"{before}..{after}")
-        if rc2 == 0:
-            changed = [f for f in files.splitlines() if f]
-            deps_changed = "requirements.txt" in changed
-            image_changed = any(f in ("Dockerfile", "docker-compose.yml") for f in changed)
-
     if before == after:
-        return jsonify({
-            "success": True,
-            "data": {
-                "before": before[:7],
-                "after": after[:7],
-                "changed_files": 0,
-                "deps_changed": False,
-                "image_changed": False,
-                "restarting": False,
-                "message": "Already up to date",
-            },
-        })
-
-    threading.Thread(target=_delayed_restart, daemon=True).start()
-    return jsonify({
-        "success": True,
-        "data": {
+        return True, {
             "before": before[:7],
             "after": after[:7],
-            "changed_files": len(changed),
-            "deps_changed": deps_changed,
-            "image_changed": image_changed,
-            "in_docker": _in_docker(),
-            "restarting": True,
-        },
-    })
+            "changed_files": 0,
+            "deps_changed": False,
+            "image_changed": False,
+            "restarting": False,
+            "message": "Already up to date",
+        }
+
+    changed = []
+    rc2, files, _ = _git("diff", "--name-only", f"{before}..{after}")
+    if rc2 == 0:
+        changed = [f for f in files.splitlines() if f]
+    deps_changed = "requirements.txt" in changed
+    image_changed = any(f in ("Dockerfile", "docker-compose.yml") for f in changed)
+    deps_error = None
+    if deps_changed:
+        ok, perr = _install_deps()
+        if not ok:
+            deps_error = perr or "pip install failed"
+
+    threading.Thread(target=_delayed_restart, daemon=True).start()
+    return True, {
+        "before": before[:7],
+        "after": after[:7],
+        "changed_files": len(changed),
+        "deps_changed": deps_changed,
+        "deps_error": deps_error,
+        "image_changed": image_changed,
+        "in_docker": _in_docker(),
+        "restarting": True,
+    }
+
+
+@bp.route("/update", methods=["POST"])
+def update():
+    ok, data = pull_and_restart()
+    if not ok:
+        code = 500 if data.startswith("git pull") else 400
+        return jsonify({"success": False, "error": data}), code
+    return jsonify({"success": True, "data": data})
+
+
+@bp.route("/auto-update", methods=["GET"])
+def get_auto_update():
+    import update_job
+    return jsonify({"success": True, "data": update_job.schedule_info()})
+
+
+@bp.route("/auto-update", methods=["PUT"])
+def put_auto_update():
+    import update_job
+    from db import set_setting
+    p = request.get_json(silent=True) or {}
+    if "enabled" in p:
+        set_setting("auto_update_enabled", bool(p["enabled"]))
+    if "time" in p:
+        t = (p.get("time") or "").strip()
+        try:
+            hh, mm = (int(x) for x in t.split(":"))
+            assert 0 <= hh <= 23 and 0 <= mm <= 59
+        except (ValueError, AttributeError, AssertionError):
+            return jsonify({"success": False, "error": "time must be HH:MM"}), 400
+        set_setting("auto_update_time", f"{hh:02d}:{mm:02d}")
+    return jsonify({"success": True, "data": update_job.schedule_info()})

@@ -152,10 +152,17 @@ def check_now():
 
 @bp.route("/now", methods=["GET"])
 def signal_now():
-    """Current signal state for every active watch, ignoring dedupe. Read-only:
-    sends nothing and moves no watermark. Network-bound, so the UI calls it on
-    an explicit button press, not on mount."""
-    return jsonify({"success": True, "data": alert_job.current_state()})
+    """Current signal state for every active watch, ignoring dedupe. Sends
+    nothing and moves no watermark, but does replace the stored snapshot.
+    Network-bound, so the UI calls it on an explicit Refresh, not on mount."""
+    return jsonify({"success": True, "data": alert_job.refresh_snapshot()})
+
+
+@bp.route("/snapshot", methods=["GET"])
+def signal_snapshot():
+    """The Signal-now result kept by the last daily check (or Refresh) —
+    {at, rows}, or null if none yet. Local read, so the tab loads it on mount."""
+    return jsonify({"success": True, "data": alert_job.get_snapshot()})
 
 
 @bp.route("/status", methods=["GET"])

@@ -1,5 +1,11 @@
 import { get, post, put, del, fmtDate, fmtDaysSince } from "../utils.js";
 
+const NOW_OPEN_KEY = "horizon.alerts.nowOpen";
+
+function readOpen() {
+  try { return localStorage.getItem(NOW_OPEN_KEY) === "1"; } catch (e) { return false; }
+}
+
 // Signal threshold fields, grouped to mirror the TradingView "Horizon Signal" inputs.
 const SIGNAL_GROUPS = [
   { title: "RSI", fields: [
@@ -38,7 +44,10 @@ export const Alerts = {
       savingSignal: false,
       checking: false,
       showSignal: false,
-      now: null,
+      now: null,          // rows of the stored snapshot (null = never taken)
+      nowAt: null,        // when that snapshot was taken (UTC ISO)
+      nowOpen: readOpen(),
+      nowSort: "recent",  // recent | ticker
       loadingNow: false,
       pollTimer: null,
       detail: null,      // { kind: 'now' | 'log', row } — drives the detail modal
@@ -48,8 +57,33 @@ export const Alerts = {
   },
   computed: {
     signalGroups() { return SIGNAL_GROUPS; },
+    // Most recent last signal first; tickers with none (or a failed fetch)
+    // sink to the bottom. Ties and the "ticker" sort are alphabetical.
+    nowSorted() {
+      const rows = [...(this.now || [])];
+      const byTicker = (a, b) => a.ticker.localeCompare(b.ticker);
+      if (this.nowSort === "ticker") return rows.sort(byTicker);
+      const day = r => (r.last_signal && r.last_signal.date) || "";
+      return rows.sort((a, b) => day(b).localeCompare(day(a)) || byTicker(a, b));
+    },
+    // One line for the collapsed header, so it's worth opening.
+    nowSummary() {
+      if (!this.now) return "not checked yet";
+      const n = this.now.length;
+      const parts = [`${n} ticker${n === 1 ? "" : "s"}`];
+      const top = this.nowSorted[0];
+      if (top && top.last_signal) {
+        parts.push(`latest ${top.ticker} ${top.last_signal.action} ${fmtDaysSince(top.last_signal.date)}`);
+      }
+      if (this.nowAt) {
+        const d = new Date(this.nowAt);
+        if (!isNaN(d)) parts.push(`as of ${d.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`);
+      }
+      return parts.join(" · ");
+    },
   },
   async mounted() {
+    this.loadSnapshot();
     await this.refresh();
     await this.loadSignal();
     await this.loadLog();
@@ -110,10 +144,22 @@ export const Alerts = {
       finally { this.savingMax = false; }
     },
 
-    // Read-only "what does the signal look like right now?" — no push, no dedupe.
+    // The daily check stores its Signal-now result; reading it is local and instant.
+    async loadSnapshot() {
+      try { this.applySnapshot(await get("/api/alerts/snapshot")); } catch (e) { console.error(e); }
+    },
+    applySnapshot(s) {
+      this.now = s ? (s.rows || []) : null;
+      this.nowAt = s ? s.at : null;
+    },
+    toggleNow() {
+      this.nowOpen = !this.nowOpen;
+      try { localStorage.setItem(NOW_OPEN_KEY, this.nowOpen ? "1" : "0"); } catch (e) { /* private mode */ }
+    },
+    // Re-run it against the latest closed bar — no push, no dedupe — and keep the result.
     async loadNow() {
       this.loadingNow = true;
-      try { this.now = await get("/api/alerts/now") || []; }
+      try { this.applySnapshot(await get("/api/alerts/now")); }
       catch (e) { this.flash(e.message, true); }
       finally { this.loadingNow = false; }
     },
@@ -155,7 +201,7 @@ export const Alerts = {
         if (this.status.status !== "running") {
           this.stopPolling();
           this.checking = false;
-          await this.loadLog();
+          await Promise.all([this.loadLog(), this.loadSnapshot()]);
           const s = this.status.last_summary;
           if (s) this.flash(`Checked ${s.checked} · sent ${s.fired}` + (s.failed ? ` · ${s.failed} failed` : ""));
         }
@@ -289,17 +335,26 @@ export const Alerts = {
 
     <!-- Signal right now (read-only; ignores dedupe) -->
     <div class="card">
-      <div class="card-head">
-        <h3>Signal now</h3>
-        <span class="text-muted">latest closed bar — ignores dedupe, sends nothing</span>
+      <div class="card-head collapsible" tabindex="0" @click="toggleNow" @keyup.enter="toggleNow">
+        <h3>Signal now <span class="chev">{{ nowOpen ? '▾' : '▸' }}</span></h3>
+        <span class="text-muted">{{ nowSummary }}</span>
         <div class="spacer"></div>
-        <button class="btn-ghost sm" :disabled="loadingNow" @click="loadNow">
-          {{ loadingNow ? 'Loading…' : (now ? '↻ Refresh' : 'Show current signals') }}
+        <button class="btn-ghost sm" :disabled="loadingNow" @click.stop="loadNow" @keyup.enter.stop>
+          {{ loadingNow ? 'Loading…' : (now ? '↻ Refresh' : 'Check signals') }}
         </button>
       </div>
 
+      <template v-if="nowOpen">
+      <div v-if="now && now.length > 1" class="toolbar">
+        <span class="text-muted">Sort</span>
+        <div class="seg">
+          <button :class="{ on: nowSort === 'recent' }" @click="nowSort = 'recent'">Last signal</button>
+          <button :class="{ on: nowSort === 'ticker' }" @click="nowSort = 'ticker'">Ticker</button>
+        </div>
+      </div>
+
       <ul v-if="now && now.length" class="mini-list">
-        <li v-for="r in now" :key="r.ticker" class="mini-row" tabindex="0"
+        <li v-for="r in nowSorted" :key="r.ticker" class="mini-row" tabindex="0"
             @click="openDetail('now', r)" @keyup.enter="openDetail('now', r)">
           <div class="mini-main">
             <span class="mini-ticker">{{ r.ticker }}</span>
@@ -312,9 +367,10 @@ export const Alerts = {
         </li>
       </ul>
       <p v-else-if="now" class="empty">No active watches.</p>
-      <p v-else class="empty">Press “Show current signals” to evaluate every watched ticker against the latest closed bar.</p>
+      <p v-else class="empty">Filled in by the daily check. Press “Check signals” to evaluate every watched ticker now.</p>
 
-      <p v-if="now && now.length" class="text-muted sig-note">Tap a ticker for prices, RSI and stochastics.</p>
+      <p v-if="now && now.length" class="text-muted sig-note">Updated by the daily check · tap a ticker for prices, RSI and stochastics.</p>
+      </template>
     </div>
 
     <!-- Recent alerts -->

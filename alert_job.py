@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from db import get_db, get_setting
+from db import get_db, get_setting, set_setting
 from prices import fetch_history
 from signals import evaluate
 from notify import push_signal, action_for
@@ -159,6 +159,7 @@ def run_checks():
     signal_params = get_setting("alert_signal", None)
     max_age = catchup_days()
     fired, failed, checked = 0, 0, 0
+    fetched = {}   # ticker → (bars, source), reused for the Signal-now snapshot
     try:
         watch_sync.sync()
         with get_db() as db:
@@ -172,6 +173,7 @@ def run_checks():
                 last_checked = w["last_checked_bar"]
                 checked += 1
                 bars, source = fetch_history(ticker)
+                fetched[ticker] = (bars, source)
                 if not bars:
                     failed += 1
                     _append(f"{ticker}: price fetch failed")
@@ -248,6 +250,12 @@ def run_checks():
 
         summary = {"checked": checked, "fired": fired, "failed": failed,
                    "at": now_et.isoformat()}
+        # Taken after the sends above are committed, so this run's pushes
+        # already read as "alerted". A snapshot failure never fails the check.
+        try:
+            refresh_snapshot(prefetched=fetched)
+        except Exception as e:
+            _append(f"Signal-now snapshot failed: {e}")
         _set(status="done", last_summary=summary)
         return summary
     except Exception as e:
@@ -270,8 +278,11 @@ def _latest_signal(series, directions):
     return None
 
 
-def current_state():
+def current_state(prefetched=None):
     """Snapshot of what every active watch looks like *right now*.
+
+    `prefetched` maps ticker → (bars, source) from a check that already fetched
+    them; only tickers missing from it are fetched here.
 
     Deliberately ignores the dedupe watermark and never pushes or writes. A
     normal check can't answer "is there a signal?" — a freshly armed ticker, or
@@ -300,8 +311,13 @@ def current_state():
         return []
 
     # Network-bound (one price fetch per ticker), so fan out.
-    with ThreadPoolExecutor(max_workers=_SNAPSHOT_WORKERS) as pool:
-        histories = list(pool.map(lambda w: fetch_history(w["ticker"]), watches))
+    prefetched = prefetched or {}
+    missing = [w["ticker"] for w in watches if w["ticker"] not in prefetched]
+    got = {}
+    if missing:
+        with ThreadPoolExecutor(max_workers=_SNAPSHOT_WORKERS) as pool:
+            got = dict(zip(missing, pool.map(fetch_history, missing)))
+    histories = [prefetched.get(w["ticker"]) or got[w["ticker"]] for w in watches]
 
     out = []
     for w, (bars, source) in zip(watches, histories):
@@ -347,6 +363,41 @@ def current_state():
     return out
 
 
+def refresh_snapshot(prefetched=None):
+    """Compute current_state() and keep it, so the Alerts tab opens with it
+    already filled in instead of waiting on a price fetch per ticker."""
+    rows = current_state(prefetched=prefetched)
+    snap = {"at": datetime.utcnow().isoformat() + "Z", "rows": rows}
+    set_setting("alert_snapshot", snap)
+    return snap
+
+
+def get_snapshot():
+    """The last stored snapshot, or None if one has never been taken."""
+    return get_setting("alert_snapshot", None)
+
+
+def _snapshot_age_hours():
+    snap = get_snapshot()
+    try:
+        at = datetime.fromisoformat(snap["at"].rstrip("Z"))
+    except (TypeError, KeyError, ValueError, AttributeError):
+        return None
+    return (datetime.utcnow() - at).total_seconds() / 3600
+
+
+def _daily_run():
+    """The scheduled slot: a full check when alerts are on (which refreshes the
+    snapshot itself), otherwise just the snapshot so Signal now stays current."""
+    if get_setting("alert_enabled", False):
+        run_checks()
+        return
+    try:
+        refresh_snapshot()
+    except Exception as e:
+        _append(f"Signal-now snapshot failed: {e}")
+
+
 # ─────────────────────────── scheduler thread ───────────────────────────
 
 def _next_check_delay(now_et):
@@ -367,14 +418,18 @@ def _loop():
     if get_setting("alert_enabled", False):
         _append("Boot catch-up run")
         run_checks()
+    else:
+        age = _snapshot_age_hours()
+        if age is None or age > 20:
+            _daily_run()
     while not _stop.is_set():
         delay = _next_check_delay(datetime.now(ET))
         # Wake at least hourly so a mid-day settings change (check time / enable)
         # is picked up without waiting a full day.
         if _stop.wait(min(delay, 3600)):
             break
-        if delay <= 3600 and get_setting("alert_enabled", False):
-            run_checks()
+        if delay <= 3600:
+            _daily_run()
 
 
 def start_scheduler():

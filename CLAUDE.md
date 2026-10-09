@@ -180,12 +180,13 @@ docker compose down             # Stop
 - **Data paths:** All DB/config paths accept env vars (`HORIZON_DB_PATH`, `SMART_MONEY_DB_PATH`, `SMART_MONEY_DIR`) for flexibility between dev/Docker
 - **Docker context:** Build context is `Horizon/` itself; single `requirements.txt` installs both Horizon and smart_money deps
 - **Flask debug:** Set `FLASK_DEBUG=0` in Docker so auto-reloader doesn't kill background threads; defaults to `1` (true) locally
-- **Schedulers:** three daemon threads, all started in `app.py` behind the `WERKZEUG_RUN_MAIN` guard so the dev reloader doesn't double them — `alert_job` (daily signal check), `sm_job` (weekly 13F update), `market_data_job` (daily market-check fill). Each wakes at most hourly so a settings change lands without waiting out the full interval, and each catches up on boot if the box was off through its slot
+- **Schedulers:** four daemon threads, all started in `app.py` behind the `WERKZEUG_RUN_MAIN` guard so the dev reloader doesn't double them — `alert_job` (daily signal check), `sm_job` (weekly 13F update), `market_data_job` (daily market-check fill), `update_job` (nightly app update). Each wakes at most hourly so a settings change lands without waiting out the full interval, and each catches up on boot if the box was off through its slot
 - **Alerts watch lists are derived** (`watch_sync.sync()`, run on every list read, check and "Signal now"): open trades → Held (kind from strategy), latest research per ticker with TRADE/INVEST → Buy (kind from decision), skipping research older than `alert_research_max_months` (default 6, 0 = no limit; set on the Alerts tab). Nothing is added/removed by hand. Dropped tickers are soft-deleted; one that returns after more than 7 days has its watermark cleared so it re-arms instead of pushing an old catch-up signal.
 - **Alerts dedupe:** each watch carries a `last_checked_bar` watermark; a ticker with a NULL watermark is *armed* at the current bar and fires nothing (no stale back-fill). Removing a watch is therefore a **soft delete** (`active = 0`) — a hard delete dropped the watermark, so remove/re-add re-armed the ticker and swallowed the signal in progress. Re-adding revives the same row.
 - **Alerts catch-up window** (`alert_catchup_days`, default 2, set on the Alerts settings card): for boxes that aren't on 24/7. The boot run already evaluates every bar past the watermark, but unbounded that means a machine off for a month pushes a month-old edge. A signal more than N **US business days** older than the latest completed bar is logged as `stale` and skipped, and the watermark still advances so it never resurfaces. Weekends don't age a signal — a Friday close is one business day old on Monday, which is the case this exists for; market holidays do count (erring toward "too old" beats pushing something you can't act on). `0` = only the most recent completed bar. A catch-up push that isn't from the latest bar carries `· from Fri 11 Sep close` in the body so it can't be read as today's.
 - **Alerts never double-send:** beyond the watermark, every push is checked against `alert_log` for an existing `ok = 1` row on the same (ticker, `bar_date`, `signal_dir`). The watermark normally makes a repeat impossible, but it can be lost — watch_sync clears it when a dropped ticker returns after a week, a restored backup can be behind — and `alert_log` is the record of what the phone actually received, so it gets the last word.
-- **Alerts "Signal now"** (`GET /api/alerts/now` → `alert_job.current_state()`): read-only snapshot of every active watch at the latest closed bar, ignoring the watermark and sending nothing. Reports the edge on that bar plus the most recent signal in the 2y window, tagged `sent` / `missed` (watermark was already past it) / `stale` (older than the catch-up window, so the next check would skip it too) / `pending`, with `business_days_old`. Use it when an expected alert never arrived — a normal check can't tell you, since an armed or already-fired ticker is silent by design. Network-bound (parallel price fetches), so it's an explicit button, not on mount.
+- **Alerts "Signal now"** (`GET /api/alerts/now` → `alert_job.current_state()`): read-only snapshot of every active watch at the latest closed bar, ignoring the watermark and sending nothing. Reports the edge on that bar plus the most recent signal in the 2y window, tagged `sent` / `missed` (watermark was already past it) / `stale` (older than the catch-up window, so the next check would skip it too) / `pending`, with `business_days_old`. Use it when an expected alert never arrived — a normal check can't tell you, since an armed or already-fired ticker is silent by design.
+- **Signal now is persisted** (`alert_job.refresh_snapshot()` → setting `alert_snapshot = {at, rows}`). Every `run_checks()` stores it at the end, reusing the bars it already fetched (taken after the sends commit, so this run's pushes read `sent`); the daily slot refreshes it even with push alerts off; `GET /now` (Refresh) recomputes and stores. The tab reads `GET /api/alerts/snapshot` on mount, so it opens filled in with no network. The card is collapsed by default (`horizon.alerts.nowOpen` in `localStorage`) with a one-line header summary — count, latest signal, as-of time — and sorts by last-signal date (newest first, no-signal rows last) or by ticker.
 
 ## Maintenance Notes
 
@@ -407,6 +408,22 @@ nothing is ever more than a week stale.
   it as `last_run` (falling back to `last_auto_run` for installs that predate it).
   Written on success only: a run that errors leaves the stamp alone, because the
   data really is still as old as it was.
+
+## Nightly app auto-update (`update_job.py`)
+
+The Settings **Update & Restart** button on a timer; the manual Check / Update
+buttons are still there. Both go through `routes.system.pull_and_restart()`:
+refuse a dirty tree, `pull --ff-only`, `pip install -r requirements.txt` if it
+changed (so a new dependency doesn't restart into an ImportError), then restart.
+
+- **On by default**, daily at `auto_update_time` (default 11:00 US/Eastern ≈
+  2–3am Sydney, inside market hours when no other job runs). Settings → App Updates.
+- Never restarts over a running alert check, 13F update, S5FI rebuild or market
+  fill; it leaves the slot unstamped and retries on the next hourly wake.
+- Boot catch-up after a 2-minute settle if the slot passed while the box was off.
+  `auto_update_last_check` is stamped *before* pulling, since a successful update
+  kills the process; `auto_update_last_result` says what happened.
+- A Dockerfile/compose change still needs `update.sh` from the host.
 
 ## Terminal research script (`research_cli.py`)
 
