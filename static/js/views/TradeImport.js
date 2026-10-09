@@ -12,19 +12,34 @@ import { post, fmtDate, fmtMoney, fmtShares } from "../utils.js";
 
 // What to ask Claude (with the IBKR connector on) for a paste-ready table. The
 // column names are the connector's own, so the parser maps them by alias.
-export const CLAUDE_PROMPT = `Using the Interactive Brokers connector, call get_account_trades with period DAYS_90 and give me the result as one CSV code block I can copy — nothing else.
+export const CLAUDE_PROMPT = `Using the Interactive Brokers connector, call all three of these:
+1. get_account_trades with period DAYS_90
+2. get_account_positions
+3. get_account_orders (working orders only)
 
-Header row, exactly:
-trade_id,trade_time,symbol,company_name,sec_type,side,size,price,commission,currency
+Give me the result as ONE CSV code block I can copy — nothing else. It has three sections. Write all three Header lines exactly as below, even if a section has no rows:
 
-Rules:
+Trades,Header,trade_id,trade_time,symbol,company_name,sec_type,side,size,price,commission,currency
+Open Positions,Header,symbol,asset_class,position,average_price
+Working Orders,Header,order_time,symbol,side,quantity,amount,limit_price,status
+
+Each data row starts with its section name and "Data", e.g. "Trades,Data,..." — put each section's Data rows straight under its Header.
+
+Trades:
 - One row per fill exactly as returned. Don't merge, total or round anything.
 - Only rows where sec_type is STK (leave out CASH / forex legs).
 - price = the raw "price" field, not "formatted_price".
 - size and commission as positive numbers; side is BUY or SELL.
 - trade_time exactly as returned (UTC, e.g. 2026-10-05T13:30:12Z).
 - Wrap company_name in double quotes.
-- If there are no stock trades, just say so.`;
+
+Open Positions:
+- Every position returned. symbol = contract_description; position and average_price as returned.
+
+Working Orders:
+- Every order returned (these haven't filled yet). Take symbol and side from the description.
+- quantity = shares if the order is for shares; amount = the cash value if it's a cash order (e.g. "Buy 66 USD PNR" → amount 66). Leave the other one empty.
+- order_time exactly as returned.`;
 
 const FIELD_LABELS = {
   entry_date: "Entry date", entry_price: "Entry price", shares: "Shares",
@@ -444,6 +459,42 @@ export const TradeImport = {
           <h3 style="margin-top:0; font-size:.95rem;">Worth knowing</h3>
           <ul class="import-notices">
             <li v-for="(n, i) in plan.notices" :key="i">{{ n }}</li>
+          </ul>
+        </div>
+
+        <div class="card" v-if="plan.holdings_check">
+          <h3 style="margin-top:0; font-size:.95rem;">Holdings check</h3>
+          <div class="text-green" style="font-size:.84rem;" v-if="!plan.holdings_check.mismatches.length">
+            After this import Horizon matches all {{ plan.holdings_check.checked }} IBKR position(s)
+            as at {{ plan.holdings_check.as_of }}.
+          </div>
+          <template v-else>
+            <div class="text-muted" style="font-size:.84rem;">
+              After this import these won't match IBKR (as at {{ plan.holdings_check.as_of }}),
+              so their alerts would be working off the wrong position. Usually a fill older than
+              the window: paste a longer period, or fix the row by hand.
+            </div>
+            <ul class="import-notices">
+              <li v-for="m in plan.holdings_check.mismatches" :key="m.ticker">
+                <strong>{{ m.ticker }}</strong>: IBKR {{ m.broker }} shares, Horizon {{ m.horizon }}
+                <span class="text-muted" v-if="m.pending_answer">— answer the question above first</span>
+              </li>
+            </ul>
+          </template>
+        </div>
+
+        <div class="card" v-if="plan.working_orders && plan.working_orders.length">
+          <h3 style="margin-top:0; font-size:.95rem;">Waiting to fill</h3>
+          <div class="text-muted" style="font-size:.84rem;">
+            Placed but not filled, so not in the log yet. Paste again after they fill.
+          </div>
+          <ul class="import-notices">
+            <li v-for="(o, i) in plan.working_orders" :key="i">
+              {{ o.side }} <strong>{{ o.ticker }}</strong>
+              {{ o.quantity != null ? o.quantity + ' shares' : (o.amount != null ? '$' + o.amount : '') }}
+              <span v-if="o.limit_price != null">at limit {{ o.limit_price }}</span>
+              <span class="text-muted" v-if="o.placed">· placed {{ o.placed }}</span>
+            </li>
           </ul>
         </div>
 

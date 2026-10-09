@@ -211,6 +211,32 @@ after-hours fill stays on its session day. The copy falls back to
 `execCommand("copy")` because `navigator.clipboard` doesn't exist over
 Tailscale's plain http.
 
+The prompt also asks for `get_account_positions` and `get_account_orders`, so the
+paste is one IBKR-style sectioned CSV: `Trades`, `Open Positions`, `Working
+Orders`. Positions feed the **holdings check**, and working orders are listed as
+**Waiting to fill**. A paste with only a `Trades` block, or a flat one, still works.
+
+**Holdings check.** `_holdings_check()` works out each ticker's open shares as they
+will be *after* Apply and compares them with the broker's positions. Those come
+live from the connector, or from an Activity Statement's Open Positions section
+(as at its last day). Any mismatch is listed. That catches every way a fill can
+be missed (older than the window, months between imports, too fresh for the
+statement) without knowing which one happened, and a mismatched position is one
+whose ADD/SELL alerts are working off the wrong share count. For a statement,
+tickers the log has moved past its date are skipped.
+
+**Statement clock.** An Activity Statement stamps fills in the account's zone,
+named only by the abbreviation on `WhenGenerated` (`AEST`/`AEDT`). From October
+Sydney is UTC+11, so the 9:30 New York open reads 00:30 *the next day*. Until
+Oct 2026 the importer kept that date, so statement and connector disagreed by a
+day on every open fill and never matched. `_parse_date(raw, zone)` now moves
+local stamps to New York. `_match_ledger_keys` takes same-day matches first, then
+±1 day, so fills an older import dated late are still recognised.
+
+**Transaction History is in AUD.** Its Gross Amount and Commission are in base
+currency next to a USD price. The commission is scaled back to USD by
+`qty × price / |gross|`. Before that fix every TH fee came in about 40% high.
+
 **Mixing sources.** The connector keys fills by exec id; Transaction History and
 Activity Statements carry no id and key by economics. `_match_ledger_keys()`
 bridges them: a file fill with an unseen key that matches a ledger fill on
@@ -307,7 +333,7 @@ hand also works, but the next CSV that touches that position will re-derive the
 columns the importer owns (entry/exit dates, prices, share count, fees) — notes,
 strategy and sector are never overwritten.
 
-**Tests**: `venv/bin/python -m unittest discover -s tests -t .` — 38 cases across
+**Tests**: `venv/bin/python -m unittest discover -s tests -t .` — 45 cases across
 the importer and the alert catch-up. The importer's cover re-imports, overlapping
 windows, both import orders, scale-ins, sell-outs, partial exits in both shapes,
 adoption of hand-logged rows, delete-and-rebuild, each question, and the Activity

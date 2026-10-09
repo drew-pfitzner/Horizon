@@ -233,8 +233,10 @@ class ImporterTest(unittest.TestCase):
         self.assertEqual(acn["win_loss"], "WIN")
         self.assertIsNotNone(acn["pl_dollar"])
 
-        # Actual IBKR commission is used, not the 1% estimate.
-        self.assertAlmostEqual(rows["SN"]["entry_fee"], 0.938211, places=5)
+        # Actual IBKR commission is used, not the 1% estimate — brought from the
+        # report's AUD back to USD by the row's own gross amount.
+        self.assertAlmostEqual(rows["SN"]["entry_fee"],
+                               0.9382113097106 * (0.4171 * 160.6) / 93.82, places=5)
 
     def test_reimporting_the_same_file_changes_nothing(self):
         nflx = {self.action(self.preview(SAMPLE), "NFLX")["key"]: {"mode": "ignore"}}
@@ -348,7 +350,8 @@ class ImporterTest(unittest.TestCase):
         self.assertAlmostEqual(after["shares"], 0.2586, places=6)
         self.assertAlmostEqual(after["entry_price"],
                                (0.1586 * 422.28 + 0.1 * 400.0) / 0.2586, places=6)
-        self.assertAlmostEqual(after["entry_fee"], 0.9301301289728 + 0.4, places=6)
+        self.assertAlmostEqual(after["entry_fee"],
+                               0.9301301289728 * (0.1586 * 422.28) / 93.01 + 0.4, places=6)
         self.assertIsNone(after["exit_date"])
 
     def test_selling_out_closes_the_position(self):
@@ -387,7 +390,9 @@ class ImporterTest(unittest.TestCase):
         self.assertEqual(closed_row["win_loss"], "WIN")
         # Entry commission is shared out, not charged twice.
         total_entry_fee = sum(r["entry_fee"] for r in rows)
-        self.assertAlmostEqual(total_entry_fee, 0.9373071136308 + 0.00037579399959999997,
+        self.assertAlmostEqual(total_entry_fee,
+                               0.9373071136308 * (0.499 * 134.2074) / 93.73
+                               + 0.00037579399959999997 * (0.0002 * 134.25) / 0.037,
                                places=6)
 
     def test_choosing_to_shrink_instead_leaves_one_open_row(self):
@@ -537,6 +542,95 @@ class ImporterTest(unittest.TestCase):
         self.assertEqual((plan["fills_new"], plan["fills_known"]), (1, 2))
         self.apply(more)
         self.assertAlmostEqual(self.trades()["DECK"]["shares"], 1.3314)
+
+    # -- statement clock vs the connector's ---------------------------------
+
+    @staticmethod
+    def _activity_oct(generated="2026-10-07, 09:12:00 AEDT"):
+        # 13:30:11Z on 5 Oct: the New York open, but 00:30 on the 6th in Sydney
+        # once daylight saving has started.
+        stamp = f'Statement,Data,WhenGenerated,"{generated}"\n' if generated else ""
+        return ("Statement,Header,Field Name,Field Value\n"
+                "Statement,Data,Title,Activity Statement\n"
+                'Statement,Data,Period,"October 5, 2026 - October 6, 2026"\n'
+                + stamp +
+                "Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,"
+                "Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code\n"
+                'Trades,Data,Order,Stocks,USD,NKE,"2026-10-06, 00:30:10",0.9222,33.65,33.7,'
+                "-31.03203,-0.310323,31.34,0,0,O\n")
+
+    NKE_CONNECTOR = (
+        "trade_id,trade_time,symbol,company_name,sec_type,side,size,price,commission,currency\n"
+        "00012971.6ac3a90b.01.01,2026-10-05T13:30:10Z,NKE,NIKE INC -CL B,STK,BUY,0.9222,33.65,0.310323,USD\n"
+    )
+
+    def test_a_statement_stamp_is_dated_by_the_new_york_session(self):
+        parsed = imp.parse_csv(self._activity_oct())
+        self.assertEqual(parsed["fills"][0]["trade_date"], "2026-10-05")
+        # Before daylight saving the same open fill is 23:30 the same day.
+        self.assertEqual(imp._parse_date("2026-09-18, 23:30:08",
+                                         imp.ZoneInfo("Australia/Sydney")), "2026-09-18")
+
+    def test_statement_and_connector_agree_across_daylight_saving(self):
+        self.apply(self._activity_oct())
+        plan = self.preview(self.NKE_CONNECTOR)
+        self.assertEqual((plan["fills_new"], plan["fills_known"]), (0, 1))
+        self.assertEqual(self.trades()["NKE"]["entry_date"], "2026-10-05")
+
+    def test_a_fill_an_older_import_dated_a_day_late_is_still_recognised(self):
+        # No WhenGenerated line: the old behaviour, which kept the Sydney date.
+        self.apply(self._activity_oct(generated=None))
+        self.assertEqual(self.trades()["NKE"]["entry_date"], "2026-10-06")
+        plan = self.preview(self.NKE_CONNECTOR)
+        self.assertEqual((plan["fills_new"], plan["fills_known"]), (0, 1))
+
+    # -- the connector paste's positions and working orders -----------------
+
+    PASTE = (
+        "Trades,Header,trade_id,trade_time,symbol,company_name,sec_type,side,size,price,commission,currency\n"
+        'Trades,Data,00012968.6aa80517.01.01,2026-09-14T13:30:15Z,DECK,"DECKERS OUTDOOR CORP",STK,BUY,0.8276,80.585,0.66692394,USD\n'
+        'Trades,Data,00012968.6aa805d9.01.01,2026-09-14T13:30:15Z,DECK,"DECKERS OUTDOOR CORP",STK,BUY,0.0038,80.95,0.00307611,USD\n'
+        "Open Positions,Header,symbol,asset_class,position,average_price\n"
+        "Open Positions,Data,DECK,STK,0.8314,81.39259081\n"
+        "Open Positions,Data,AGX,STK,0.1586,426.50252207\n"
+        "Working Orders,Header,order_time,symbol,side,quantity,amount,limit_price,status\n"
+        "Working Orders,Data,2026-10-08T20:31:41Z,PNR,BUY,,66,52.75,NEW\n"
+        "Working Orders,Data,2026-10-08T20:18:13Z,TJX,SELL,1.0197,,138,NEW\n"
+    )
+
+    def test_reads_the_three_section_paste(self):
+        parsed = imp.parse_csv(self.PASTE)
+        self.assertEqual(len(parsed["fills"]), 2)
+        self.assertEqual(parsed["holdings"]["positions"], {"DECK": 0.8314, "AGX": 0.1586})
+        self.assertEqual([(o["ticker"], o["side"], o["quantity"], o["amount"])
+                          for o in parsed["working_orders"]],
+                         [("PNR", "BUY", None, 66.0), ("TJX", "SELL", 1.0197, None)])
+
+    def test_holdings_check_flags_a_position_the_log_is_missing(self):
+        plan = self.preview(self.PASTE)
+        check = plan["holdings_check"]
+        # DECK will match once applied; AGX was bought before the window.
+        self.assertEqual([(m["ticker"], m["broker"], m["horizon"]) for m in check["mismatches"]],
+                         [("AGX", 0.1586, 0.0)])
+        self.assertEqual(len(plan["working_orders"]), 2)
+
+    def test_a_paste_with_no_trades_still_checks_holdings(self):
+        paste = ("Trades,Header,trade_id,trade_time,symbol,company_name,sec_type,side,size,price,commission,currency\n"
+                 "Open Positions,Header,symbol,asset_class,position,average_price\n"
+                 "Open Positions,Data,DECK,STK,0.8314,81.39\n"
+                 "Working Orders,Header,order_time,symbol,side,quantity,amount,limit_price,status\n")
+        self.apply(self.CONNECTOR)
+        plan = self.preview(paste)
+        self.assertEqual(plan["holdings_check"]["mismatches"], [])
+        self.assertEqual(plan["fills_in_file"], 0)
+
+    def test_statement_positions_skip_tickers_the_log_has_moved_past(self):
+        # The ACTIVITY statement says TJX 1.0197 on 18 Sep; a later sale in the
+        # log means the statement is just older, not that the log is wrong.
+        self.apply(_txn([("2026-09-01", "TJX COMPANIES INC", "Buy", "TJX", "1.0197", "130", "-0.5"),
+                         ("2026-09-25", "TJX COMPANIES INC", "Sell", "TJX", "-1.0197", "140", "-0.5")]))
+        plan = self.preview(ACTIVITY)
+        self.assertNotIn("TJX", [m["ticker"] for m in plan["holdings_check"]["mismatches"]])
 
     # -- selective apply --------------------------------------------------
 

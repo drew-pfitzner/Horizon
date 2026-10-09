@@ -79,6 +79,7 @@ _FIELD_ALIASES = {
     "desc":       ["companyname", "description", "securitydescription", "listingexchangedescription"],
     "txid":       ["transactionid", "tradeid", "ibexecid", "executionid"],
     "asset":      ["assetcategory", "assetclass", "sectype"],
+    "gross":      ["grossamount", "proceeds"],
 }
 
 
@@ -118,13 +119,29 @@ def _num(raw):
 _MARKET_TZ = ZoneInfo("America/New_York")
 _ISO_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T")
 
+# An Activity Statement stamps fills in the account's own time zone, named only
+# by the abbreviation on its WhenGenerated line ("2026-09-20, 13:07:53 AEST").
+# From October to April Sydney is UTC+11, so a 9:30 New York open fill reads
+# 00:30 *the next day* — and the same fill from the connector would carry a
+# different date and never be recognised as the same fill.
+_ZONE_BY_ABBREV = {
+    "AEST": "Australia/Sydney", "AEDT": "Australia/Sydney",
+    "EST": "America/New_York", "EDT": "America/New_York",
+    "CST": "America/Chicago", "CDT": "America/Chicago",
+    "GMT": "Europe/London", "BST": "Europe/London",
+    "HKT": "Asia/Hong_Kong", "SGT": "Asia/Singapore",
+}
+_LOCAL_STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2})[,; ]\s*(\d{1,2}:\d{2}(?::\d{2})?)$")
+
 _DATE_PATTERNS = ["%Y-%m-%d", "%Y%m%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d",
                   "%B %d, %Y", "%b %d, %Y"]
 
 
-def _parse_date(raw):
+def _parse_date(raw, zone=None):
     """ISO date from the several shapes IBKR uses. Time-of-day is dropped —
-    Horizon logs trades by day.
+    Horizon logs trades by day. `zone` is the time zone a bare local stamp
+    ("2026-10-06, 00:30:11") is written in; given one, the stamp is moved to
+    New York first, so the date is the trading session's.
 
     The whole string is tried before any trimming, because "August 14, 2026" and
     "2026-09-14, 09:30:00" both contain a comma and only one of them wants it
@@ -141,6 +158,16 @@ def _parse_date(raw):
         if stamp.tzinfo is not None:
             stamp = stamp.astimezone(_MARKET_TZ)
         return stamp.date().isoformat()
+    local = _LOCAL_STAMP.match(s)
+    if zone is not None and local:
+        clock = local.group(2)
+        if clock.count(":") == 1:
+            clock += ":00"
+        try:
+            stamp = datetime.fromisoformat(f"{local.group(1)}T{clock.zfill(8)}")
+            return stamp.replace(tzinfo=zone).astimezone(_MARKET_TZ).date().isoformat()
+        except ValueError:
+            pass
     candidates = [s]
     # "2026-09-14, 09:30:00" / "20260914;093000" / "2026-09-14 09:30"
     for sep in (",", ";", " "):
@@ -229,6 +256,69 @@ def _field(sections, name, *labels):
     return None
 
 
+def _statement_zone(sections):
+    """The zone a statement's Date/Time stamps are written in, or None."""
+    words = (_field(sections, "Statement", "WhenGenerated") or "").split()
+    name = _ZONE_BY_ABBREV.get(words[-1].upper()) if words else None
+    return ZoneInfo(name) if name else None
+
+
+def _holdings(sections, as_of):
+    """What the broker says is held, {ticker: shares}, or None if the file
+    doesn't say. An Activity Statement's Open Positions section (its Summary
+    rows) and the connector paste's both land here."""
+    blocks = sections.get("Open Positions")
+    if not blocks:
+        return None
+    held = {}
+    for header, data_rows in blocks:
+        keys = [_norm_key(h) for h in header]
+        cols = _map_columns(header)
+        qty_idx = next((keys.index(k) for k in ("position", "quantity") if k in keys), None)
+        if "symbol" not in cols or qty_idx is None:
+            continue
+        disc_idx = keys.index("datadiscriminator") if "datadiscriminator" in keys else None
+        for row in data_rows:
+            if disc_idx is not None and _cell(row, disc_idx).lower() not in ("", "summary"):
+                continue
+            asset = _cell(row, cols.get("asset")).upper() if "asset" in cols else ""
+            if asset and asset not in ("STK", "STOCK", "STOCKS"):
+                continue
+            symbol = _cell(row, cols["symbol"]).upper()
+            qty = _num(_cell(row, qty_idx))
+            if symbol.lower() in _EMPTY or qty is None or _FX_SYMBOL.match(symbol):
+                continue
+            held[symbol] = held.get(symbol, 0.0) + qty
+    return {"as_of": as_of, "positions": held}
+
+
+def _working_orders(sections):
+    """Orders placed but not filled yet. Only the connector paste has these."""
+    out = []
+    for header, data_rows in sections.get("Working Orders", []):
+        keys = [_norm_key(h) for h in header]
+
+        def col(row, *names):
+            for n in names:
+                if n in keys:
+                    return _cell(row, keys.index(n))
+            return ""
+
+        for row in data_rows:
+            symbol = col(row, "symbol").upper()
+            if symbol.lower() in _EMPTY:
+                continue
+            out.append({
+                "ticker": symbol,
+                "side": _side_of(col(row, "side"), None) or col(row, "side").upper(),
+                "quantity": _num(col(row, "quantity", "size")),
+                "amount": _num(col(row, "amount", "cashamount")),
+                "limit_price": _num(col(row, "limitprice", "price")),
+                "placed": _parse_date(col(row, "ordertime", "time", "date")),
+            })
+    return out
+
+
 def _period_from_statement(sections):
     """'August 14, 2026 - September 14, 2026' off the Statement section."""
     for name in ("Statement", "Account Information"):
@@ -309,6 +399,7 @@ def parse_csv(text):
     if not sections:
         raise ImportError_("No CSV header row found.")
 
+    zone = _statement_zone(sections)
     fills = []
     ignored = defaultdict(int)
     dividends = []
@@ -354,7 +445,7 @@ def parse_csv(text):
                     if label.lower() == "dividend" and symbol.lower() not in _EMPTY:
                         dividends.append({
                             "ticker": symbol,
-                            "date": _parse_date(_cell(row, cols.get("date"))),
+                            "date": _parse_date(_cell(row, cols.get("date")), zone),
                             "description": desc,
                         })
                     ignored[label] += 1
@@ -366,7 +457,7 @@ def parse_csv(text):
                     continue
 
                 price = _num(_cell(row, cols.get("price")))
-                trade_date = _parse_date(_cell(row, cols.get("date")))
+                trade_date = _parse_date(_cell(row, cols.get("date")), zone)
                 if price is None or trade_date is None:
                     ignored["Missing price or date"] += 1
                     continue
@@ -378,6 +469,15 @@ def parse_csv(text):
 
                 commission = _num(_cell(row, cols.get("commission"))) if "commission" in cols else None
                 commission = abs(commission) if commission is not None else None
+                # Transaction History states its amounts and commission in the
+                # account's base currency (AUD) beside a USD price. The gross
+                # amount gives the rate, so the commission is brought back to
+                # the price's currency, as every other source states it.
+                gross = _num(_cell(row, cols.get("gross"))) if "gross" in cols else None
+                if commission and gross:
+                    rate = abs(qty_raw * price) / abs(gross)
+                    if abs(rate - 1) > 0.001:
+                        commission *= rate
                 currency = (_cell(row, cols.get("currency")).upper() or "USD")
                 if currency.lower() in _EMPTY:
                     currency = "USD"
@@ -418,16 +518,22 @@ def parse_csv(text):
             fills = section_fills
             break
 
-    if not fills:
+    orders = _working_orders(sections)
+    # A connector paste with no fills in the window still carries positions
+    # and orders worth checking, so only a file with none of the three fails.
+    if not fills and not (sections.get("Open Positions") or orders):
         raise ImportError_(
             "No Buy or Sell rows found. Expected an IBKR Transaction History "
             "report, an Activity Statement, or a Trades Flex Query export."
         )
 
     start, end = _period_from_statement(sections)
+    # A statement's positions are as at its last day; a connector paste has no
+    # period and its positions are live.
+    held_as_of = end or date.today().isoformat()
     dates = [f["trade_date"] for f in fills]
     if not start:
-        start, end = min(dates), max(dates)
+        start, end = (min(dates), max(dates)) if dates else (held_as_of, held_as_of)
     if not end:
         end = max(dates)
 
@@ -440,6 +546,8 @@ def parse_csv(text):
         # An Activity Statement also says what the account is worth; a
         # Transaction History report doesn't, hence None rather than 0.
         "portfolio": _portfolio_from_statement(sections, end),
+        "holdings": _holdings(sections, held_as_of),
+        "working_orders": orders,
     }
 
 
@@ -630,8 +738,18 @@ def _superseding_fills(baseline, file_fills):
     return same_day
 
 
-def _same_fill(a, b):
-    return (a["ticker"] == b["ticker"] and a["trade_date"] == b["trade_date"]
+def _same_fill(a, b, day_slack=0):
+    if a["trade_date"] != b["trade_date"]:
+        if not day_slack:
+            return False
+        try:
+            gap = abs((date.fromisoformat(a["trade_date"])
+                       - date.fromisoformat(b["trade_date"])).days)
+        except (TypeError, ValueError):
+            return False
+        if gap > day_slack:
+            return False
+    return (a["ticker"] == b["ticker"]
             and a["side"] == b["side"] and _qty_close(a["qty"], b["qty"])
             and abs(a["price"] - b["price"]) <= max(0.005, abs(b["price"]) * 1e-4))
 
@@ -647,18 +765,25 @@ def _match_ledger_keys(file_fills, ledger_fills, known_fill_keys):
     file doesn't already account for, and if one fits, the fill takes the
     ledger's key and counts as already imported. One ledger fill matches at
     most one file fill, so two genuinely identical fills stay two.
+
+    Same-day matches are taken first; a second pass allows one day either way,
+    for fills an older import dated by the statement's Sydney clock rather than
+    the New York session (see _ZONE_BY_ABBREV).
     """
     file_keys = {f["fill_key"] for f in file_fills}
     spare = [l for l in ledger_fills
              if l.get("source") == "ibkr" and l["fill_key"] not in file_keys]
-    for f in file_fills:
-        if f["fill_key"] in known_fill_keys:
-            continue
-        for l in spare:
-            if _same_fill(f, l):
-                f["fill_key"] = l["fill_key"]
-                spare.remove(l)
-                break
+    for slack in (0, 1):
+        for f in file_fills:
+            # A fill matched on the first pass now carries a ledger key, which
+            # is known, so it's skipped here on the second.
+            if f["fill_key"] in known_fill_keys:
+                continue
+            for l in spare:
+                if _same_fill(f, l, slack):
+                    f["fill_key"] = l["fill_key"]
+                    spare.remove(l)
+                    break
 
 
 # ----------------------------------------------------------------- planner ---
@@ -791,7 +916,73 @@ def build_plan(parsed, existing_trades, known_fill_keys, commission_pct=1.0,
         "notices": _notices(parsed, existing_trades),
         "actions": actions,
         "needs_input": [a["key"] for a in actions if a["action"] == "ambiguous"],
+        "holdings_check": _holdings_check(parsed, actions, existing_trades, trade_index),
+        "working_orders": parsed.get("working_orders") or [],
     }
+
+
+# Positions are stated to 4 decimal places; anything finer is rounding.
+_HOLDING_EPS = 5e-5
+
+
+def _holdings_check(parsed, actions, existing_trades, trade_index):
+    """Will Horizon's open positions match the broker's once this is applied?
+
+    The broker's positions are live (connector) or as at the statement's last
+    day, while the trade window can miss fills — a buy older than 90 days, an
+    import skipped for months, a fill too fresh for the statement. Comparing
+    share counts catches every one of those without having to know which.
+    Tickers with Horizon activity after a statement's date are left out: the
+    statement is simply older than the log there.
+    """
+    holdings = parsed.get("holdings")
+    if not holdings:
+        return None
+    as_of = holdings["as_of"]
+
+    open_shares = defaultdict(float)
+    newer = set()
+    for t in existing_trades:
+        ticker = (t.get("ticker") or "").upper()
+        if not t.get("exit_date"):
+            open_shares[ticker] += float(t.get("shares") or 0)
+        if max(t.get("entry_date") or "", t.get("exit_date") or "") > as_of:
+            newer.add(ticker)
+    for f in parsed.get("ledger_fills", []):
+        if (f.get("trade_date") or "") > as_of:
+            newer.add(f["ticker"])
+
+    # What Apply will do: each create/update replaces the open rows it owns
+    # with the open rows it derives. Unanswered questions change nothing yet.
+    pending = set()
+    for a in actions:
+        if a["action"] == "ambiguous":
+            pending.add(a["ticker"])
+        if a["action"] not in ("create", "update"):
+            continue
+        for tid in a.get("trade_ids", []):
+            t = trade_index.get(tid)
+            if t and not t.get("exit_date"):
+                open_shares[a["ticker"]] -= float(t.get("shares") or 0)
+        for target in a.get("targets", []):
+            d = target["derived"]
+            if not d.get("exit_date"):
+                open_shares[a["ticker"]] += d.get("shares") or 0
+
+    broker = holdings["positions"]
+    mismatches = []
+    for ticker in sorted(set(broker) | {k for k, v in open_shares.items() if v > _HOLDING_EPS}):
+        if ticker in newer:
+            continue
+        want, have = broker.get(ticker, 0.0), max(open_shares.get(ticker, 0.0), 0.0)
+        if abs(want - have) > _HOLDING_EPS:
+            mismatches.append({
+                "ticker": ticker,
+                "broker": round(want, 6),
+                "horizon": round(have, 6),
+                "pending_answer": ticker in pending,
+            })
+    return {"as_of": as_of, "checked": len(broker), "mismatches": mismatches}
 
 
 def position_key(ticker, group):

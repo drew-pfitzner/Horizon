@@ -53,7 +53,10 @@ def _load_context(tickers):
 def _plan_from_request(payload):
     """Parse + plan. Shared by preview and apply so the two can't drift."""
     parsed = imp.parse_csv(payload.get("csv") or "")
-    tickers = sorted({f["ticker"] for f in parsed["fills"]})
+    # Tickers the broker says you hold count too, so the holdings check can see
+    # whether the log already has fills newer than a statement's positions.
+    held = (parsed.get("holdings") or {}).get("positions") or {}
+    tickers = sorted({f["ticker"] for f in parsed["fills"]} | set(held))
     trades, known, ledger = _load_context(tickers)
     parsed["ledger_fills"] = ledger
     plan = imp.build_plan(parsed, trades, known,
