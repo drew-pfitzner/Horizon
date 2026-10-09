@@ -413,7 +413,7 @@ nothing is ever more than a week stale.
 
 The Settings **Update & Restart** button on a timer; the manual Check / Update
 buttons are still there. Both go through `routes.system.pull_and_restart()`:
-refuse a dirty tree, `pull --ff-only`, `pip install -r requirements.txt` if it
+refuse edited tracked files (untracked ones are ignored), `pull --ff-only`, `pip install -r requirements.txt` if it
 changed (so a new dependency doesn't restart into an ImportError), then restart.
 
 - **On by default**, daily at `auto_update_time` (default 11:00 US/Eastern ≈

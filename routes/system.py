@@ -69,7 +69,7 @@ def _collect_info(fetch_first: bool = False):
     _, branch, _ = _git("rev-parse", "--abbrev-ref", "HEAD")
     _, subj, _ = _git("log", "-1", "--pretty=%s")
     _, date, _ = _git("log", "-1", "--pretty=%cI")
-    _, dirty, _ = _git("status", "--porcelain")
+    _, dirty, _ = _git("status", "--porcelain", "--untracked-files=no")
     dirty_files = [ln for ln in dirty.splitlines() if ln][:20] if dirty else []
     rc_b, behind, _ = _git("rev-list", "--count", "HEAD..@{u}")
     rc_a, ahead, _ = _git("rev-list", "--count", "@{u}..HEAD")
@@ -157,7 +157,7 @@ def pull_and_restart():
     scheduled by the time this returns."""
     if not _git_available():
         return False, "Not a git checkout"
-    _, dirty, _ = _git("status", "--porcelain")
+    _, dirty, _ = _git("status", "--porcelain", "--untracked-files=no")
     if dirty:
         return False, "Working tree has uncommitted changes; refusing to pull. Commit or stash first."
 
