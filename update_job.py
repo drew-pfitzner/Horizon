@@ -4,29 +4,54 @@ Once a day it fetches, and if upstream has moved, pulls (fast-forward only)
 and restarts, exactly as the button does (routes.system.pull_and_restart).
 
   * On by default: the point is never having to open Settings to stay current.
-  * Daily slot in US/Eastern like every other job. The default, 11:00 ET, is
-    ~2–3am in Sydney and inside US market hours, when no other job runs.
+  * Daily slot in the device's own timezone (unlike the market jobs, which run
+    on US/Eastern): 02:00 means 2am wherever the box is. Docker's clock is
+    UTC, so the container takes its zone from HORIZON_TZ (compose sets it)
+    and falls back to Australia/Sydney if that isn't set yet.
   * Never restarts over work in flight: if an alert check, 13F update, S5FI
     rebuild or market-check fill is running, it waits for the next hourly wake.
   * Boot catch-up: a box that was off through the slot checks when it next
     comes up (after a short settle delay).
   * A dirty working tree or a non-fast-forward pull is reported, not forced.
 """
+import os
 import threading
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from db import get_setting, set_setting
 
-DEFAULT_TIME = "11:00"
+DEFAULT_TIME = "02:00"
+# Local time of day. A new key: the old "auto_update_time" was US/Eastern, and
+# reading it as local would move an 11:00 ET slot to 11am Sydney.
+_TIME_KEY = "auto_update_local_time"
+_DOCKER_FALLBACK_TZ = "Australia/Sydney"
 _BOOT_DELAY = 120  # let the app finish starting before a catch-up restart
 
 _thread = None
 _stop = threading.Event()
 
 
+def _zone():
+    """The device's timezone: HORIZON_TZ or TZ if set, else the system zone
+    (a Docker container's is UTC, so there it's Sydney)."""
+    name = (os.environ.get("HORIZON_TZ") or os.environ.get("TZ") or "").strip().lstrip(":")
+    if not name and os.environ.get("HORIZON_IN_DOCKER"):
+        name = _DOCKER_FALLBACK_TZ
+    if name:
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+    return datetime.now().astimezone().tzinfo
+
+
+def _zone_name(zone):
+    return getattr(zone, "key", None) or datetime.now(zone).tzname()
+
+
 def _now():
-    from alert_job import ET
-    return datetime.now(ET)
+    return datetime.now(_zone())
 
 
 def enabled():
@@ -34,12 +59,12 @@ def enabled():
 
 
 def _slot_time():
-    hhmm = get_setting("auto_update_time", DEFAULT_TIME) or DEFAULT_TIME
+    hhmm = get_setting(_TIME_KEY, DEFAULT_TIME) or DEFAULT_TIME
     try:
         hh, mm = (int(x) for x in hhmm.split(":"))
         return hh, mm
     except (ValueError, AttributeError):
-        return 11, 0
+        return 2, 0
 
 
 def _next_slot(now):
@@ -136,7 +161,7 @@ def schedule_info():
     return {
         "enabled": enabled(),
         "time": f"{hh:02d}:{mm:02d}",
-        "timezone": "US/Eastern",
+        "timezone": _zone_name(now.tzinfo),
         "next_run": _next_slot(now).isoformat(timespec="seconds"),
         "last_check": get_setting("auto_update_last_check", None),
         "last_result": get_setting("auto_update_last_result", None),

@@ -416,8 +416,11 @@ buttons are still there. Both go through `routes.system.pull_and_restart()`:
 refuse edited tracked files (untracked ones are ignored), `pull --ff-only`, `pip install -r requirements.txt` if it
 changed (so a new dependency doesn't restart into an ImportError), then restart.
 
-- **On by default**, daily at `auto_update_time` (default 11:00 US/Eastern ≈
-  2–3am Sydney, inside market hours when no other job runs). Settings → App Updates.
+- **On by default**, daily at `auto_update_local_time` (default 02:00) in the
+  **device's** timezone, not US/Eastern like the other jobs: `HORIZON_TZ` or
+  `TZ` (compose sets `HORIZON_TZ=Australia/Sydney`, since the container clock is
+  UTC), else the system zone, with a Sydney fallback in Docker. The old `auto_update_time` key
+  was ET and is ignored. Settings → App Updates.
 - Never restarts over a running alert check, 13F update, S5FI rebuild or market
   fill; it leaves the slot unstamped and retries on the next hourly wake.
 - Boot catch-up after a 2-minute settle if the slot passed while the box was off.

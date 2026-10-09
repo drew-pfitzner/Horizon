@@ -18,6 +18,9 @@ services:
       - HORIZON_DB_PATH=/app/data/horizon.db
       - SEC_IDENTITY=${SEC_IDENTITY:-}
       - HORIZON_IN_DOCKER=1
+      # The container clock is UTC; the nightly auto-update time is read in
+      # this zone. Set HORIZON_TZ in .env if the machine isn't in Sydney.
+      - HORIZON_TZ=${HORIZON_TZ:-Australia/Sydney}
       # Optional: your computer's LAN IP, so Settings can show a scannable
       # "connect from your phone" QR code when viewing via localhost.
       - HORIZON_HOST_IP=${HORIZON_HOST_IP:-}

@@ -59,7 +59,7 @@ export const Settings = {
       savingMcAuto: false,
       mcAutoMessage: null,
       mcAutoMessageClass: "",
-      autoUpdate: { enabled: true, time: "11:00", next_run: null, last_check: null, last_result: null },
+      autoUpdate: { enabled: true, time: "02:00", timezone: "", next_run: null, last_check: null, last_result: null },
       savingAutoUpdate: false,
       autoUpdateMessage: null,
       autoUpdateMessageClass: "",
@@ -622,8 +622,8 @@ export const Settings = {
           </p>
           <div class="settings-fields">
             <div class="field">
-              <label>Time (US/Eastern)</label>
-              <input type="text" v-model="autoUpdate.time" placeholder="11:00" style="max-width: 8rem;">
+              <label>Time ({{ autoUpdate.timezone || "this device" }})</label>
+              <input type="text" v-model="autoUpdate.time" placeholder="02:00" style="max-width: 8rem;">
             </div>
           </div>
           <label class="check-inline">

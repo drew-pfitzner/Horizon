@@ -232,5 +232,5 @@ def put_auto_update():
             assert 0 <= hh <= 23 and 0 <= mm <= 59
         except (ValueError, AttributeError, AssertionError):
             return jsonify({"success": False, "error": "time must be HH:MM"}), 400
-        set_setting("auto_update_time", f"{hh:02d}:{mm:02d}")
+        set_setting(update_job._TIME_KEY, f"{hh:02d}:{mm:02d}")
     return jsonify({"success": True, "data": update_job.schedule_info()})
