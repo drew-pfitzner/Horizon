@@ -78,12 +78,15 @@ def bar_label(bar_date):
 
 
 def push_signal(bucket, kind, signal_dir, ticker, price, rsi=None, d=None,
-                from_bar=None):
+                from_bar=None, provisional=False):
     """Build + send a signal push. Returns (ok, error, title, body).
 
     `from_bar` is the signal's bar date, passed only when that bar *isn't* the
     most recent completed one — a catch-up push after the box was off. The body
-    then says which close it came from, so it can't be mistaken for today's."""
+    then says which close it came from, so it can't be mistaken for today's.
+
+    `provisional` marks a push off today's still-open bar (a check slot before
+    the close): the price is the live one and the signal can still fade."""
     action = action_for(bucket, signal_dir)
     title = build_title(bucket, action, ticker)
     parts = [f"@ {price:.2f}"] if price is not None else []
@@ -98,6 +101,8 @@ def push_signal(bucket, kind, signal_dir, ticker, price, rsi=None, d=None,
     label = bar_label(from_bar) if from_bar else None
     if label:
         parts.append(f"from {label} close")
+    if provisional:
+        parts.append("provisional, before the close")
     body = " · ".join(parts)
     tags = ["chart_with_upwards_trend"] if signal_dir == "BUY" else ["chart_with_downwards_trend"]
     ok, err = push(title, body, priority=(4 if signal_dir == "SELL" else 3), tags=tags)

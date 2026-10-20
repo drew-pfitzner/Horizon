@@ -9,6 +9,10 @@ Design goals (see ALERTS_PLAN.md):
   * Bar-date dedupe: a signal fires at most once per (ticker, direction); stored
     bar dates prevent re-firing across restarts.
   * Single-flight: the timer and a manual "Check now" can't overlap.
+  * Provisional slot: a check time before the close also evaluates today's
+    still-open bar at its live price and pushes any edge marked provisional.
+    The finished bar is checked as usual on the next run; a provisional push
+    that held is not sent again (see _check_open_bar()).
 
 Reuses the sm_job background-thread + ring-buffer pattern.
 """
@@ -75,6 +79,17 @@ def is_running():
 
 # ─────────────────────────── evaluation core ───────────────────────────
 
+def _now_et():
+    return datetime.now(ET)
+
+
+def _slot_is_provisional():
+    """True when alert_check_time falls before the close, so the daily slot
+    runs while today's bar is still open."""
+    hh, mm = _check_time()
+    return (hh, mm) < (MARKET_CLOSE_HOUR, 0)
+
+
 def _completed_bars(bars, now_et):
     """Drop today's in-progress bar (before the ET close) so we never evaluate
     an unfinished daily candle. Weekends/holidays have no today-bar → no-op."""
@@ -138,24 +153,156 @@ def _set_checked(db, ticker, bar_date):
 
 
 def _log(db, *, ticker, bucket, action, direction, kind, bar_date, price,
-         message, ok, error):
+         message, ok, error, provisional=False):
     db.execute(
         "INSERT INTO alert_log (ticker, bucket, action, signal_dir, kind, "
-        "bar_date, price, message, sent_at, transport, ok, error) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "bar_date, price, message, sent_at, transport, ok, error, provisional) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (ticker, bucket, action, direction, kind, bar_date, price, message,
-         datetime.utcnow().isoformat() + "Z", "ntfy", 1 if ok else 0, error),
+         datetime.utcnow().isoformat() + "Z", "ntfy", 1 if ok else 0, error,
+         1 if provisional else 0),
     )
 
 
-def run_checks():
+def _sent_provisionally(db, ticker, bar_date, direction):
+    return db.execute(
+        "SELECT 1 FROM alert_log WHERE ticker = ? AND bar_date = ? "
+        "AND signal_dir = ? AND ok = 1 AND provisional = 1 LIMIT 1",
+        (ticker, bar_date, direction),
+    ).fetchone() is not None
+
+
+def _note_unconfirmed(db, ticker, series, after, directions):
+    """Job-log line for each provisional push whose bar has now closed without
+    the signal. Nothing is sent — by now the session it was for is over — but
+    it's the answer to "did that early BUY hold?"."""
+    closed = {s["date"]: s for s in series if s["date"] > after}
+    if not closed:
+        return
+    rows = db.execute(
+        "SELECT bar_date, signal_dir, action FROM alert_log WHERE ticker = ? "
+        "AND ok = 1 AND provisional = 1 AND bar_date > ?", (ticker, after),
+    ).fetchall()
+    for r in rows:
+        bar = closed.get(r["bar_date"])
+        if r["signal_dir"] in directions and bar \
+                and not bar["buy" if r["signal_dir"] == "BUY" else "sell"]:
+            _append(f"{ticker}: provisional {r['action']} @ {r['bar_date']} "
+                    "did not hold at the close")
+
+
+def _check_open_bar(db, *, ticker, bucket, kind, bars, now_et, signal_params,
+                    directions):
+    """Provisional pass over today's still-open bar. Returns (fired, failed).
+
+    Pushes an edge on that bar at its live price, marked provisional. The
+    watermark is left alone: the bar isn't final, so the next run evaluates it
+    again once it has closed. If the signal held, _already_sent() finds this
+    push and nothing goes out twice; if it formed only in the last minutes, the
+    next run pushes it as an ordinary catch-up from that close."""
+    today = now_et.strftime("%Y-%m-%d")
+    if not bars or bars[-1]["date"] != today or now_et.hour >= MARKET_CLOSE_HOUR:
+        return 0, 0
+    bar = evaluate(bars, kind=kind, params=signal_params)[-1]
+    fired = failed = 0
+    for direction in directions:
+        if not bar["buy" if direction == "BUY" else "sell"]:
+            continue
+        action = action_for(bucket, direction)
+        if _already_sent(db, ticker, today, direction):
+            continue
+        ok, err, title, body = push_signal(
+            bucket, kind, direction, ticker, bar["close"],
+            rsi=bar["rsi"], d=bar["d"], provisional=True)
+        _log(db, ticker=ticker, bucket=bucket, action=action,
+             direction=direction, kind=kind, bar_date=today,
+             price=bar["close"], message=f"{title} — {body}",
+             ok=ok, error=err, provisional=True)
+        if ok:
+            fired += 1
+            _append(f"{ticker}: {action} @ {today} — sent (provisional)")
+        else:
+            failed += 1
+            _append(f"{ticker}: {action} @ {today} — provisional send failed: {err}")
+    return fired, failed
+
+
+def _check_closed_bars(db, *, ticker, bucket, kind, bars, last_checked,
+                       signal_params, max_age, directions, session_open=False):
+    """Push the latest edge among completed bars past the watermark, then
+    advance it. Returns (fired, failed).
+
+    `session_open`: today's bar is still trading, so even the latest completed
+    bar is yesterday's — the push says which close it's from."""
+    latest_bar = bars[-1]["date"]
+    series = evaluate(bars, kind=kind, params=signal_params)
+    # Only bars newer than the watermark are eligible (catch-up window).
+    eligible = [s for s in series if s["date"] > last_checked]
+
+    _note_unconfirmed(db, ticker, series, last_checked, directions)
+    fired = failed = 0
+    send_failed = False
+    for direction in directions:
+        key = "buy" if direction == "BUY" else "sell"
+        hits = [s for s in eligible if s[key]]
+        if not hits:
+            continue
+        sig = hits[-1]  # only the latest edge in the window
+        action = "ADD" if (bucket == "HELD" and direction == "BUY") else direction
+        age = _business_days_between(sig["date"], latest_bar)
+
+        # Past the catch-up window: too old to act on, so note it and
+        # send nothing. The watermark still advances below, which is
+        # what stops it resurfacing on every later run.
+        if age > max_age:
+            _append(f"{ticker}: {action} @ {sig['date']} — stale "
+                    f"({age} business day{'' if age == 1 else 's'} old), skipped")
+            continue
+
+        # Belt and braces over the watermark — see _already_sent().
+        if _already_sent(db, ticker, sig["date"], direction):
+            if _sent_provisionally(db, ticker, sig["date"], direction):
+                _append(f"{ticker}: {action} @ {sig['date']} — held at the close "
+                        "(sent provisionally)")
+            else:
+                _append(f"{ticker}: {action} @ {sig['date']} — already sent, skipped")
+            continue
+
+        ok, err, title, body = push_signal(
+            bucket, kind, direction, ticker, sig["close"],
+            rsi=sig["rsi"], d=sig["d"],
+            from_bar=sig["date"] if (age or session_open) else None)
+        _log(db, ticker=ticker, bucket=bucket, action=action,
+             direction=direction, kind=kind, bar_date=sig["date"],
+             price=sig["close"], message=f"{title} — {body}",
+             ok=ok, error=err)
+        if ok:
+            fired += 1
+            _append(f"{ticker}: {action} @ {sig['date']} — sent")
+        else:
+            failed += 1
+            send_failed = True
+            _append(f"{ticker}: {action} @ {sig['date']} — send failed: {err}")
+
+    # Advance the watermark only if delivery succeeded; a failed push
+    # (ntfy down / topic not set) is retried on the next run, and since
+    # we only ever fire the latest hit in the window it won't pile up.
+    if not send_failed:
+        _set_checked(db, ticker, latest_bar)
+    return fired, failed
+
+
+def run_checks(provisional=False):
     """Evaluate every active watch and push any due signals. Returns a summary
-    dict. Safe to call concurrently — a second caller gets a 'busy' result."""
+    dict. Safe to call concurrently — a second caller gets a 'busy' result.
+
+    `provisional` (the daily slot, when it's set before the close) also checks
+    today's still-open bar — see _check_open_bar()."""
     if not _run_lock.acquire(blocking=False):
         return {"busy": True}
     _set(status="running", started_at=datetime.utcnow().isoformat() + "Z",
          finished_at=None, error=None)
-    now_et = datetime.now(ET)
+    now_et = _now_et()
     signal_params = get_setting("alert_signal", None)
     max_age = catchup_days()
     fired, failed, checked = 0, 0, 0
@@ -182,10 +329,13 @@ def run_checks():
                          message=None, ok=False, error="price fetch failed")
                     continue
 
+                open_bars = bars
                 bars = _completed_bars(bars, now_et)
+                session_open = len(bars) < len(open_bars)
                 if not bars:
                     continue
                 latest_bar = bars[-1]["date"]
+                directions = ["BUY"] if bucket == "BUY" else ["BUY", "SELL"]
 
                 # First time this ticker is evaluated: arm it at the current bar
                 # and fire NOTHING. Only bars that close *after* this point ever
@@ -195,58 +345,22 @@ def run_checks():
                     _append(f"{ticker}: armed at {latest_bar} (no back-fill)")
                     continue
 
-                if latest_bar <= last_checked:
-                    continue  # no new completed bar since last check
+                if latest_bar > last_checked:
+                    f, x = _check_closed_bars(
+                        db, ticker=ticker, bucket=bucket, kind=kind, bars=bars,
+                        last_checked=last_checked, signal_params=signal_params,
+                        max_age=max_age, directions=directions,
+                        session_open=provisional and session_open)
+                    fired += f
+                    failed += x
 
-                series = evaluate(bars, kind=kind, params=signal_params)
-                directions = ["BUY"] if bucket == "BUY" else ["BUY", "SELL"]
-                # Only bars newer than the watermark are eligible (catch-up window).
-                eligible = [s for s in series if s["date"] > last_checked]
-
-                send_failed = False
-                for direction in directions:
-                    key = "buy" if direction == "BUY" else "sell"
-                    hits = [s for s in eligible if s[key]]
-                    if not hits:
-                        continue
-                    sig = hits[-1]  # only the latest edge in the window
-                    action = "ADD" if (bucket == "HELD" and direction == "BUY") else direction
-                    age = _business_days_between(sig["date"], latest_bar)
-
-                    # Past the catch-up window: too old to act on, so note it and
-                    # send nothing. The watermark still advances below, which is
-                    # what stops it resurfacing on every later run.
-                    if age > max_age:
-                        _append(f"{ticker}: {action} @ {sig['date']} — stale "
-                                f"({age} business day{'' if age == 1 else 's'} old), skipped")
-                        continue
-
-                    # Belt and braces over the watermark — see _already_sent().
-                    if _already_sent(db, ticker, sig["date"], direction):
-                        _append(f"{ticker}: {action} @ {sig['date']} — already sent, skipped")
-                        continue
-
-                    ok, err, title, body = push_signal(
-                        bucket, kind, direction, ticker, sig["close"],
-                        rsi=sig["rsi"], d=sig["d"],
-                        from_bar=sig["date"] if age else None)
-                    _log(db, ticker=ticker, bucket=bucket, action=action,
-                         direction=direction, kind=kind, bar_date=sig["date"],
-                         price=sig["close"], message=f"{title} — {body}",
-                         ok=ok, error=err)
-                    if ok:
-                        fired += 1
-                        _append(f"{ticker}: {action} @ {sig['date']} — sent")
-                    else:
-                        failed += 1
-                        send_failed = True
-                        _append(f"{ticker}: {action} @ {sig['date']} — send failed: {err}")
-
-                # Advance the watermark only if delivery succeeded; a failed push
-                # (ntfy down / topic not set) is retried on the next run, and since
-                # we only ever fire the latest hit in the window it won't pile up.
-                if not send_failed:
-                    _set_checked(db, ticker, latest_bar)
+                if provisional and session_open:
+                    f, x = _check_open_bar(
+                        db, ticker=ticker, bucket=bucket, kind=kind,
+                        bars=open_bars, now_et=now_et,
+                        signal_params=signal_params, directions=directions)
+                    fired += f
+                    failed += x
 
         summary = {"checked": checked, "fired": fired, "failed": failed,
                    "at": now_et.isoformat()}
@@ -390,7 +504,7 @@ def _daily_run():
     """The scheduled slot: a full check when alerts are on (which refreshes the
     snapshot itself), otherwise just the snapshot so Signal now stays current."""
     if get_setting("alert_enabled", False):
-        run_checks()
+        run_checks(provisional=_slot_is_provisional())
         return
     try:
         refresh_snapshot()
@@ -400,13 +514,21 @@ def _daily_run():
 
 # ─────────────────────────── scheduler thread ───────────────────────────
 
-def _next_check_delay(now_et):
-    """Seconds until the next occurrence of alert_check_time (ET)."""
+def _check_time():
+    """alert_check_time (ET) as (hour, minute); 16:20 if unset or garbled."""
     hhmm = get_setting("alert_check_time", "16:20") or "16:20"
     try:
         hh, mm = (int(x) for x in hhmm.split(":"))
+        if 0 <= hh < 24 and 0 <= mm < 60:
+            return hh, mm
     except (ValueError, AttributeError):
-        hh, mm = 16, 20
+        pass
+    return 16, 20
+
+
+def _next_check_delay(now_et):
+    """Seconds until the next occurrence of alert_check_time (ET)."""
+    hh, mm = _check_time()
     target = now_et.replace(hour=hh, minute=mm, second=0, microsecond=0)
     if target <= now_et:
         target += timedelta(days=1)

@@ -120,7 +120,7 @@ def get_log():
     with get_db() as db:
         rows = db.execute(
             "SELECT id, ticker, bucket, action, signal_dir, kind, bar_date, price, "
-            "message, sent_at, ok, error FROM alert_log "
+            "message, sent_at, ok, error, provisional FROM alert_log "
             "ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
     return jsonify({"success": True, "data": [dict(r) for r in rows]})

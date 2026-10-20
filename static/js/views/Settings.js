@@ -776,6 +776,12 @@ export const Settings = {
           <div class="field">
             <label>Daily check time (US/Eastern)</label>
             <input type="text" v-model="ntfy.alert_check_time" placeholder="16:20" style="max-width: 8rem;">
+            <span class="text-muted live-source">
+              After 16:00 the check runs on the day's closing bar. Before 16:00 (e.g. 15:30) it also checks
+              the bar still trading at its live price and sends any signal as <em>provisional</em>, so there's
+              time to act before the bell. It can still fade by the close. The next check confirms it
+              without sending it twice.
+            </span>
           </div>
           <div class="field">
             <label>Catch-up window (business days)</label>

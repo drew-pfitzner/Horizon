@@ -18,6 +18,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -32,6 +33,9 @@ import alert_job                      # noqa: E402
 # A week of daily bars: Thu, Fri, then Mon — the weekend is the point.
 THU, FRI, MON = "2026-09-10", "2026-09-11", "2026-09-14"
 BARS = [{"date": d, "close": 100.0} for d in ("2026-09-08", "2026-09-09", THU, FRI, MON)]
+MON_1530 = datetime(2026, 9, 14, 15, 30, tzinfo=alert_job.ET)
+TUE_0900 = datetime(2026, 9, 15, 9, 0, tzinfo=alert_job.ET)
+TUE_1530 = datetime(2026, 9, 15, 15, 30, tzinfo=alert_job.ET)
 
 
 def _series(*signal_dates, direction="buy"):
@@ -59,6 +63,7 @@ class CatchupTest(unittest.TestCase):
         self._real_push = notify.push
         self._real_fetch = alert_job.fetch_history
         self._real_evaluate = alert_job.evaluate
+        self._real_now = alert_job._now_et
 
         def fake_push(title, body, priority=None, tags=None):
             self.sent.append((title, body))
@@ -72,6 +77,7 @@ class CatchupTest(unittest.TestCase):
         notify.push = self._real_push
         alert_job.fetch_history = self._real_fetch
         alert_job.evaluate = self._real_evaluate
+        alert_job._now_et = self._real_now
 
     # -- helpers ----------------------------------------------------------
 
@@ -232,6 +238,105 @@ class CatchupTest(unittest.TestCase):
         # The failed attempt is logged with ok = 0, so the dedupe guard won't
         # mistake it for a delivery on the retry.
         self.assertEqual(self.log_rows()[0]["ok"], 0)
+
+    # -- provisional (pre-close) slot -----------------------------------------
+    # Monday 15:30 ET: MON is the bar still trading, FRI the latest completed.
+    # Tuesday's run sees MON closed (BARS has no Tuesday bar, as before 9:30).
+
+    def at(self, when):
+        alert_job._now_et = lambda: when
+
+    def edges(self, *dates, direction="buy"):
+        """Like signals_on, but the series stops where the bars passed in stop,
+        so a dropped open bar really is missing from the closed-bar pass."""
+        def fake(bars, kind=None, params=None):
+            return [{"date": b["date"], "close": b["close"], "rsi": 30.0, "k": 15.0,
+                     "d": 12.0, "buy": False, "sell": False,
+                     **({direction: True} if b["date"] in dates else {})}
+                    for b in bars]
+        alert_job.evaluate = fake
+
+    def provisional_rows(self):
+        with dbmod.get_db() as db:
+            return [dict(r) for r in db.execute(
+                "SELECT bar_date, provisional FROM alert_log WHERE ok = 1").fetchall()]
+
+    def test_slot_before_the_close_is_provisional(self):
+        dbmod.set_setting("alert_check_time", "15:30")
+        self.assertTrue(alert_job._slot_is_provisional())
+        dbmod.set_setting("alert_check_time", "16:20")
+        self.assertFalse(alert_job._slot_is_provisional())
+
+    def test_provisional_run_pushes_the_open_bar(self):
+        self.watch(last_checked=THU)
+        self.edges(MON)
+        self.at(MON_1530)
+
+        summary = alert_job.run_checks(provisional=True)
+
+        self.assertEqual(summary["fired"], 1)
+        self.assertIn("provisional", self.sent[0][1])
+        self.assertEqual(self.provisional_rows(), [{"bar_date": MON, "provisional": 1}])
+        # The open bar isn't final, so the watermark stops at the last close.
+        self.assertEqual(self.watermark(), FRI)
+
+    def test_non_provisional_run_ignores_the_open_bar(self):
+        self.watch(last_checked=THU)
+        self.edges(MON)
+        self.at(MON_1530)
+
+        alert_job.run_checks()
+
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.watermark(), FRI)
+
+    def test_provisional_signal_that_holds_is_not_resent(self):
+        self.watch(last_checked=THU)
+        self.edges(MON)
+        self.at(MON_1530)
+        alert_job.run_checks(provisional=True)
+
+        self.at(TUE_0900)
+        summary = alert_job.run_checks(provisional=True)
+
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(summary["fired"], 0)
+        self.assertEqual(self.watermark(), MON)
+        self.assertTrue(any("held at the close" in line
+                            for line in alert_job.get_state()["output"]))
+
+    def test_provisional_signal_that_fades_is_noted(self):
+        self.watch(last_checked=THU)
+        self.edges(MON)
+        self.at(MON_1530)
+        alert_job.run_checks(provisional=True)
+
+        self.edges()   # gone by the close
+        self.at(TUE_0900)
+        alert_job.run_checks(provisional=True)
+
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.watermark(), MON)
+        self.assertTrue(any("did not hold" in line
+                            for line in alert_job.get_state()["output"]))
+
+    def test_signal_formed_at_the_close_arrives_next_slot_with_its_date(self):
+        self.watch(last_checked=THU)
+        self.edges()   # nothing at 15:30
+        self.at(MON_1530)
+        alert_job.run_checks(provisional=True)
+        self.assertEqual(self.sent, [])
+
+        # Tuesday's session is open: the Monday bar now closed carries an edge.
+        tue_bars = BARS + [{"date": "2026-09-15", "close": 100.0}]
+        alert_job.fetch_history = lambda ticker: (list(tue_bars), "test")
+        self.edges(MON)
+        self.at(TUE_1530)
+        alert_job.run_checks(provisional=True)
+
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("from Mon 14 Sep close", self.sent[0][1])
+        self.assertNotIn("provisional", self.sent[0][1])
 
 
 if __name__ == "__main__":

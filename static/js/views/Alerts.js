@@ -227,7 +227,9 @@ export const Alerts = {
       if (!r.last_signal) return "text-muted";
       return this.deliveryClass(r.last_signal.delivery);
     },
-    logSubtitle(r) { return `${fmtDaysSince(r.sent_at)} · ${r.ok ? "sent" : "failed"}`; },
+    logSubtitle(r) {
+      return `${fmtDaysSince(r.sent_at)} · ${r.ok ? "sent" : "failed"}${r.provisional ? " · provisional" : ""}`;
+    },
 
     fx(v, digits = 1) { return v == null ? "—" : Number(v).toFixed(digits); },
     kindBadge(kind) { return kind === "Invest" ? "blue" : "green"; },

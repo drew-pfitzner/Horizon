@@ -23,7 +23,7 @@ DEFAULT_SETTINGS = {
     "ntfy_server": "https://ntfy.sh",
     "ntfy_topic": "",            # empty = alerts disabled until set (use a long random topic)
     "alert_enabled": False,
-    "alert_check_time": "16:20",  # US/Eastern; shortly after the 4pm close
+    "alert_check_time": "16:20",  # US/Eastern; after the 4pm close, or before it for a provisional check
     # Catch-up window, in US business days: how old a signal may be and still be
     # pushed when the box comes back online after being off. 0 = only the most
     # recent completed bar. Weekends don't count, so a Friday signal is still
@@ -229,6 +229,8 @@ def init_db():
                 (k, json.dumps(v)),
             )
         _add_column_if_missing(db, "alert_watch", "last_checked_bar", "TEXT")
+        # 1 = pushed off today's still-open bar by a pre-close check slot.
+        _add_column_if_missing(db, "alert_log", "provisional", "INTEGER DEFAULT 0")
 
         # Commission. NULL means "derive it from commission_pct"; a stored number
         # (including 0) is an explicit override.

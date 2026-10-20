@@ -137,7 +137,7 @@ export const Home = {
     alertSubtitle(r) {
       const when = fmtDaysSince(r.sent_at);
       const where = r.bucket === "HELD" ? "held" : "watchlist";
-      return `${when} · ${where}${r.kind ? ` · ${r.kind}` : ""}`;
+      return `${when} · ${where}${r.kind ? ` · ${r.kind}` : ""}${r.provisional ? " · provisional" : ""}`;
     },
     fxRate(from, to) {
       from = (from || "USD").toUpperCase();
