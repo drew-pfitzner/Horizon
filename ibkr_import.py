@@ -36,6 +36,7 @@ the plan back for a human to look at; `routes/trade_import.py` does the writing.
 
 import csv
 import io
+import itertools
 import re
 from collections import defaultdict
 from datetime import date, datetime
@@ -785,6 +786,101 @@ def _match_ledger_keys(file_fills, ledger_fills, known_fill_keys):
                     spare.remove(l)
                     break
 
+    # Last pass: the same order written two ways. A statement prints an order
+    # as one line at its average price; the connector lists each execution. So
+    # a file line can be several ledger fills, or several file lines one ledger
+    # fill. Either way the file side takes a ledger key and adds nothing.
+    for f in file_fills:
+        if f["fill_key"] in known_fill_keys:
+            continue
+        parts = _find_parts(f, spare)
+        if parts:
+            f["fill_key"] = parts[0]["fill_key"]
+            for p in parts:
+                spare.remove(p)
+    for l in list(spare):
+        loose = [f for f in file_fills if f["fill_key"] not in known_fill_keys]
+        parts = _find_parts(l, loose)
+        if parts:
+            for p in parts:
+                p["fill_key"] = l["fill_key"]
+            spare.remove(l)
+
+
+# An order rarely fills in more than a handful of executions; the cap keeps the
+# subset search trivially small.
+_MAX_PARTS = 6
+
+
+def _days_apart(a, b):
+    try:
+        return abs((date.fromisoformat(a) - date.fromisoformat(b)).days)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sums_to(whole, parts):
+    qty = sum(p["qty"] for p in parts)
+    if qty <= QTY_EPS or not _qty_close(qty, whole["qty"]):
+        return False
+    avg = sum(p["qty"] * p["price"] for p in parts) / qty
+    return abs(avg - whole["price"]) <= max(0.005, abs(whole["price"]) * 1e-4)
+
+
+def _find_parts(whole, pool):
+    """The fills in `pool` that are `whole` broken into executions, or None.
+
+    Same ticker and side, within a day either way (an older import may have
+    dated it by the statement's Sydney clock), quantities summing to the whole
+    and their weighted price equal to its price. A single fill is a valid
+    answer — that's the same execution recorded twice.
+    """
+    cands = [p for p in pool
+             if p is not whole and p["ticker"] == whole["ticker"]
+             and p["side"] == whole["side"]
+             and (_days_apart(p["trade_date"], whole["trade_date"]) or 0) <= 1
+             and p["qty"] <= whole["qty"] + QTY_EPS]
+    # Same-day pieces first, so a combination is found on the right day
+    # before one that reaches across.
+    cands.sort(key=lambda p: (p["trade_date"] != whole["trade_date"], -p["qty"]))
+    cands = cands[:12]
+    for n in range(1, min(len(cands), _MAX_PARTS) + 1):
+        for combo in itertools.combinations(cands, n):
+            if _sums_to(whole, combo):
+                return list(combo)
+    return None
+
+
+def _ledger_duplicates(ledger_fills):
+    """Ledger fills that record an order the ledger already holds another way.
+
+    Before the last pass of `_match_ledger_keys` existed, a statement's
+    one-line order and the connector's executions of it both went in, and the
+    position doubled. This finds those leftovers so the plan can drop them:
+    a fill that equals the sum of other fills, imported at a *different* time
+    (one file never carries both shapes, so fills that came in together are
+    genuinely separate). The executions are kept and the summary line goes;
+    for a one-to-one repeat, the later import goes. Returns fill keys.
+    """
+    fills = [f for f in ledger_fills
+             if f.get("source") == "ibkr" and f.get("imported_at")]
+    # Biggest first so an order line is tested before its pieces; among equals
+    # the later import first, so that's the one dropped.
+    fills.sort(key=lambda f: f["imported_at"], reverse=True)
+    fills.sort(key=lambda f: -f["qty"])
+    drop, used = set(), set()
+    for whole in fills:
+        if whole["fill_key"] in used:
+            continue
+        pool = [f for f in fills
+                if f["fill_key"] not in drop and f["fill_key"] != whole["fill_key"]
+                and f["imported_at"] != whole["imported_at"]]
+        parts = _find_parts(whole, pool)
+        if parts:
+            drop.add(whole["fill_key"])
+            used.update(p["fill_key"] for p in parts)
+    return drop
+
 
 # ----------------------------------------------------------------- planner ---
 
@@ -827,7 +923,20 @@ def build_plan(parsed, existing_trades, known_fill_keys, commission_pct=1.0,
     resolutions = resolutions or {}
     file_fills = parsed["fills"]
     period = parsed["period"]
-    _match_ledger_keys(file_fills, parsed.get("ledger_fills", []), known_fill_keys)
+
+    # Duplicates an older import left in the ledger come out first. Their keys
+    # stop counting as known, so a file line that *is* one of them gets matched
+    # again — to the copy that stays.
+    all_ledger = parsed.get("ledger_fills", [])
+    dupes = _ledger_duplicates(all_ledger)
+    ledger_fills = [f for f in all_ledger if f["fill_key"] not in dupes]
+    known_fill_keys = set(known_fill_keys) - dupes
+    dupes_by_ticker = defaultdict(list)
+    for f in all_ledger:
+        if f["fill_key"] in dupes:
+            dupes_by_ticker[f["ticker"]].append(f)
+
+    _match_ledger_keys(file_fills, ledger_fills, known_fill_keys)
 
     by_ticker = defaultdict(list)
     for f in file_fills:
@@ -844,11 +953,13 @@ def build_plan(parsed, existing_trades, known_fill_keys, commission_pct=1.0,
 
     # Fills already in the ledger, so a group can be rebuilt from the union.
     ledger_by_ticker = defaultdict(list)
-    for f in parsed.get("ledger_fills", []):
+    for f in ledger_fills:
         ledger_by_ticker[f["ticker"]].append(f)
 
     actions = []
-    for ticker in sorted(by_ticker):
+    # A ticker whose only news is a duplicate in the ledger still needs
+    # planning, or the doubled row would never be put right.
+    for ticker in sorted(set(by_ticker) | set(dupes_by_ticker)):
         new_fills = [f for f in by_ticker[ticker] if f["fill_key"] not in known_fill_keys]
         ledger = ledger_by_ticker.get(ticker, [])
         ledger_keys = {f["fill_key"] for f in ledger}
@@ -877,7 +988,7 @@ def build_plan(parsed, existing_trades, known_fill_keys, commission_pct=1.0,
                     continue
                 union.append(b)
 
-        if not new_fills:
+        if not new_fills and ticker not in dupes_by_ticker:
             # Everything here is already recorded — nothing to do for this ticker.
             actions.append({
                 "key": f"{ticker}:settled",
@@ -892,7 +1003,7 @@ def build_plan(parsed, existing_trades, known_fill_keys, commission_pct=1.0,
         for idx, group in enumerate(_group_positions(union)):
             group_new = [f for f in (group["buys"] + group["sells"])
                          if f["fill_key"] not in known_fill_keys and f["source"] == "ibkr"]
-            if not group_new:
+            if not group_new and not _touches(group, dupes_by_ticker.get(ticker)):
                 continue  # this position predates the file's new rows
 
             key = f"{ticker}:{idx}"
@@ -904,6 +1015,13 @@ def build_plan(parsed, existing_trades, known_fill_keys, commission_pct=1.0,
     # A skip row per ticker is noise when something else on that ticker moved.
     moved = {a["ticker"] for a in actions if a["action"] != "skip"}
     actions = [a for a in actions if a["action"] != "skip" or a["ticker"] not in moved]
+
+    for a in actions:
+        extra = dupes_by_ticker.get(a["ticker"])
+        if extra and a["action"] in ("create", "update"):
+            a["reason"] += (f" Drops {len(extra)} duplicate fill(s): the same order was on "
+                            f"file twice, once per execution and once as the statement's "
+                            f"single line.")
 
     return {
         "period": period,
@@ -918,7 +1036,27 @@ def build_plan(parsed, existing_trades, known_fill_keys, commission_pct=1.0,
         "needs_input": [a["key"] for a in actions if a["action"] == "ambiguous"],
         "holdings_check": _holdings_check(parsed, actions, existing_trades, trade_index),
         "working_orders": parsed.get("working_orders") or [],
+        "ledger_dupes": [{"ticker": f["ticker"], "date": f["trade_date"],
+                          "side": f["side"], "qty": f["qty"], "price": f["price"]}
+                         for t in sorted(dupes_by_ticker) for f in dupes_by_ticker[t]],
+        "_dupe_keys": {t: [f["fill_key"] for f in fs] for t, fs in dupes_by_ticker.items()},
     }
+
+
+def _touches(group, dropped):
+    """Did any of `dropped` sit inside this position's run of dates?"""
+    if not dropped:
+        return False
+    fills = group["buys"] + group["sells"]
+    lo = min(f["trade_date"] for f in fills)
+    still_open = not group["buys"] or group["qty"] > QTY_EPS
+    hi = "9999-12-31" if still_open else max(f["trade_date"] for f in fills)
+    for d in dropped:
+        day = d["trade_date"]
+        if lo <= day <= hi or (_days_apart(day, lo) or 9) <= 1 \
+                or (_days_apart(day, hi) or 9) <= 1:
+            return True
+    return False
 
 
 # Positions are stated to 4 decimal places; anything finer is rounding.
@@ -1126,6 +1264,14 @@ def _plan_group(ticker, key, group, group_new, choice, commission_pct, period,
 
     out = dict(base, action=action, reason=reason, targets=targets,
                orphaned_trade_ids=orphaned)
+    if action == "skip" and group_new:
+        # The row is right but the fills behind it aren't on file (a row whose
+        # ledger was lost to a delete, say). Apply files them, so the next
+        # import stops calling them new.
+        out["files_only"] = True
+        out["reason"] = (f"Already matches what's logged, but {len(group_new)} fill(s) "
+                         f"behind it weren't on file. Apply records them; the row "
+                         f"doesn't change.")
     if partial:
         out["question"] = "partial_exit"
         out["options"] = [
@@ -1211,8 +1357,10 @@ def _fmt_qty(q):
 def strip_internals(plan):
     """A JSON-safe copy of the plan: the raw fill objects the writer needs are
     of no use to the browser and shouldn't be trusted coming back from it."""
-    return dict(plan, actions=[{k: v for k, v in a.items() if not k.startswith("_")}
-                               for a in plan["actions"]])
+    out = {k: v for k, v in plan.items() if not k.startswith("_")}
+    out["actions"] = [{k: v for k, v in a.items() if not k.startswith("_")}
+                      for a in plan["actions"]]
+    return out
 
 
 def _notices(parsed, existing_trades):

@@ -202,6 +202,12 @@ Trades → **Import**: choose an IBKR CSV (or drop it on the panel), or **Paste
 CSV**, look at what it would change, apply it. Nothing is written until you press
 Apply, and every row is shown with its before → after before you do.
 
+**Pasting a copied file (phone).** In the IBKR app, Share → **Copy** puts the
+CSV *file* on the iOS clipboard, not its text, so an ordinary paste into the box
+landed nothing. `onPaste` in `TradeImport.js` takes the clipboard's file (or its
+text, under any text/CSV type) and previews at once, no Preview tap. Paste CSV
+focuses the box so a long-press brings up Paste.
+
 **Paste route (IBKR connector).** The paste box has a **Copy Claude prompt**
 button (`CLAUDE_PROMPT` in `TradeImport.js`): it asks Claude, with the IBKR
 connector on, to run `get_account_trades` (DAYS_90) and return one CSV block with
@@ -245,6 +251,26 @@ bridges them: a file fill with an unseen key that matches a ledger fill on
 ticker/day/side/qty/price (±0.005 or 0.01%) takes the ledger's key and counts as
 already imported, one-to-one so identical fills stay distinct. Without it,
 alternating file and paste would log every fill twice.
+
+**One order, two shapes.** An Activity Statement prints an order as *one* line at
+its average price (GNTX `3.1124 @ 21.2054`); the connector lists each execution
+(`3.0 @ 21.20` + `0.1124 @ 21.35`). One-to-one matching missed that, and until Nov
+2026 the order went in twice. GNTX, CMCSA, DECK, BLBD and NKE all showed double
+the shares IBKR held. `_match_ledger_keys` now has a last pass that matches a line
+to a *set* of fills (`_find_parts`: same ticker/side, ±1 day, quantities summing,
+weighted price equal) in either direction. `_ledger_duplicates` cleans up what
+older imports left. A ledger fill that equals the sum of other fills imported at a
+*different* time (one file never carries both shapes) is a duplicate: the plan
+leaves it out, so the row's update shows the share count halving, it's listed in
+`ledger_dupes`, and Apply deletes it along with that row's update.
+
+**Fills missing behind a correct row.** A delete can cascade away a position's
+fills while another row for it survives (PNR: a doubled buy looked partly sold,
+the split's open half owned the fills and was deleted). The survivor still
+matches the file, so the plan said "already matches" and never filed the fills,
+and every import called them new. Such a group is now `skip` with
+`files_only: true`, and any Apply files its fills against the row
+("Record N fill(s)" on the Nothing to do card).
 
 **The shape problem.** `trades` is one row per *position* — a single entry price,
 a single share count, one optional exit. IBKR's CSV is one row per *fill*: a $100
@@ -335,7 +361,7 @@ hand also works, but the next CSV that touches that position will re-derive the
 columns the importer owns (entry/exit dates, prices, share count, fees) — notes,
 strategy and sector are never overwritten.
 
-**Tests**: `venv/bin/python -m unittest discover -s tests -t .` — 51 cases across
+**Tests**: `venv/bin/python -m unittest discover -s tests -t .` — 56 cases across
 the importer and the alert catch-up. The importer's cover re-imports, overlapping
 windows, both import orders, scale-ins, sell-outs, partial exits in both shapes,
 adoption of hand-logged rows, delete-and-rebuild, each question, and the Activity

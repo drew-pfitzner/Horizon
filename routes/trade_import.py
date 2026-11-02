@@ -126,7 +126,9 @@ def apply():
 
     with get_db() as db:
         for action in plan["actions"]:
-            if action["key"] not in wanted:
+            # A row that already matches but whose fills were never filed has
+            # no checkbox to untick; filing them changes nothing you can see.
+            if action["key"] not in wanted and not action.get("files_only"):
                 continue
             c, u, f, names = _apply_action(
                 db, action, strategies.get(action["key"]) or "TRADE", now)
@@ -134,6 +136,20 @@ def apply():
             updated += u
             fills_added += f
             touched.extend(names)
+
+        # Duplicate fills go with the row they doubled: when its update is
+        # applied, or when nothing on the ticker needed a row changed at all.
+        fills_removed = 0
+        for ticker, keys in (plan.get("_dupe_keys") or {}).items():
+            mine = [a for a in plan["actions"] if a["ticker"] == ticker]
+            if any(a["action"] == "ambiguous" for a in mine):
+                continue
+            rows = [a for a in mine if a["action"] in ("create", "update")]
+            if rows and not any(a["key"] in wanted for a in rows):
+                continue
+            for k in keys:
+                fills_removed += db.execute(
+                    "DELETE FROM trade_fills WHERE fill_key=?", (k,)).rowcount
 
         for action in declined:
             for fill in action.get("_fills", []):
@@ -161,6 +177,7 @@ def apply():
 
     return jsonify({"success": True, "data": {
         "created": created, "updated": updated, "fills_added": fills_added,
+        "fills_removed": fills_removed,
         "tickers": sorted(set(touched)),
         "period": plan["period"],
         "portfolio": portfolio,

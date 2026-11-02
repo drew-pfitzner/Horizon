@@ -91,6 +91,18 @@ export const TradeImport = {
       if (!entries.length) return "";
       return entries.map(([k, n]) => `${n} × ${k}`).join(", ");
     },
+    // Rows that already match but whose fills were never filed (see files_only).
+    filing() {
+      return this.settled.filter(a => a.files_only);
+    },
+    unfiled() {
+      return this.filing.reduce((n, a) => n + (a.new_fill_count || 0), 0);
+    },
+    nothingButton() {
+      const nav = this.plan && this.plan.portfolio && this.updatePortfolio;
+      if (this.unfiled && nav) return `Record ${this.unfiled} fill(s) + update portfolio value`;
+      return this.unfiled ? `Record ${this.unfiled} fill(s)` : "Update portfolio value";
+    },
     periodLabel() {
       if (!this.plan) return "";
       const p = this.plan.period || {};
@@ -152,6 +164,42 @@ export const TradeImport = {
       }
       this.promptCopied = true;
       setTimeout(() => { this.promptCopied = false; }, 2000);
+    },
+
+    openPaste() {
+      this.pasting = !this.pasting;
+      // Focused, so on the phone a long-press brings up Paste straight away.
+      if (this.pasting) this.$nextTick(() => this.$refs.pasteBox && this.$refs.pasteBox.focus());
+    },
+
+    // Share sheet → Copy on iOS puts the *file* on the clipboard, not its text,
+    // so a plain paste would land nothing in the box. Take whatever came: a file
+    // goes the same way as choosing one, text previews at once.
+    onPaste(event) {
+      const cd = event.clipboardData;
+      if (!cd) return;
+      const items = Array.from(cd.items || []);
+      const file = Array.from(cd.files || [])[0]
+        || items.filter(i => i.kind === "file").map(i => i.getAsFile()).find(Boolean);
+      if (file) {
+        event.preventDefault();
+        this.pasting = false;
+        this.read(file);
+        return;
+      }
+      let text = cd.getData("text/plain") || cd.getData("text/csv");
+      if (!text) {
+        const type = Array.from(cd.types || []).find(t => /text|csv|comma-separated/i.test(t));
+        if (type) text = cd.getData(type);
+      }
+      if (!text || !text.trim()) return;      // let the browser do its own thing
+      event.preventDefault();
+      if (!/[,\n]/.test(text.trim())) {
+        this.error = "That pasted a link to the file, not what's in it. Use Choose a CSV file instead.";
+        return;
+      }
+      this.pasted = text;
+      this.usePasted();
     },
 
     usePasted() {
@@ -252,7 +300,7 @@ export const TradeImport = {
             {{ loading ? 'Reading…' : 'Choose a CSV file…' }}
             <input type="file" accept=".csv,text/csv" ref="file" @change="onFile" hidden>
           </label>
-          <button class="btn-ghost" @click="pasting = !pasting">
+          <button class="btn-ghost" @click="openPaste">
             {{ pasting ? 'Cancel paste' : 'Paste CSV' }}
           </button>
           <span v-if="fileName" class="import-filename">{{ fileName }}</span>
@@ -262,8 +310,8 @@ export const TradeImport = {
         </div>
 
         <div v-if="pasting" style="margin-top:.6rem;">
-          <textarea v-model="pasted" rows="8" spellcheck="false"
-                    placeholder="trade_id,trade_time,symbol,company_name,sec_type,side,size,price,commission,currency"
+          <textarea v-model="pasted" rows="8" spellcheck="false" ref="pasteBox" @paste="onPaste"
+                    placeholder="Paste here — a CSV file copied from the IBKR share sheet, or its text. It previews as soon as it lands."
                     style="width:100%; font-family:monospace; font-size:.78rem;"></textarea>
           <div class="toolbar" style="margin-top:.4rem;">
             <button class="btn-primary" :disabled="loading" @click="usePasted">
@@ -283,7 +331,8 @@ export const TradeImport = {
       <div v-if="result" class="card import-result">
         <strong class="text-green">
           Imported — {{ result.created }} new, {{ result.updated }} updated,
-          {{ result.fills_added }} fill(s) recorded.
+          {{ result.fills_added }} fill(s) recorded<template v-if="result.fills_removed">,
+          {{ result.fills_removed }} duplicate(s) removed</template>.
         </strong>
         <div class="text-muted" style="font-size:.82rem; margin-top:.25rem;" v-if="result.tickers.length">
           {{ result.tickers.join(', ') }}
@@ -444,13 +493,18 @@ export const TradeImport = {
 
         <div class="card" v-else-if="!questions.length">
           <strong class="text-green">Nothing to do — the log already matches this statement.</strong>
-          <div class="text-muted" style="font-size:.84rem; margin-top:.3rem;">
+          <div class="text-muted" style="font-size:.84rem; margin-top:.3rem;" v-if="!unfiled">
             All {{ plan.fills_in_file }} fill(s) in this file are already recorded.
           </div>
+          <div class="text-muted" style="font-size:.84rem; margin-top:.3rem;" v-else>
+            The rows are right, but {{ unfiled }} fill(s) behind
+            {{ filing.map(a => a.ticker).join(', ') }} aren't on file yet. Until they are,
+            every import will call them new. Recording them doesn't change any row.
+          </div>
           <!-- The trades may be old news while the NAV isn't. -->
-          <div class="toolbar" style="margin-top:.6rem;" v-if="plan.portfolio && updatePortfolio">
+          <div class="toolbar" style="margin-top:.6rem;" v-if="unfiled || (plan.portfolio && updatePortfolio)">
             <button class="btn-ghost" :disabled="applying" @click="applyPlan">
-              {{ applying ? 'Saving…' : 'Update portfolio value' }}
+              {{ applying ? 'Saving…' : nothingButton }}
             </button>
           </div>
         </div>

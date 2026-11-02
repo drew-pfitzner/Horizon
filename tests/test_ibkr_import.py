@@ -632,6 +632,91 @@ class ImporterTest(unittest.TestCase):
         plan = self.preview(ACTIVITY)
         self.assertNotIn("TJX", [m["ticker"] for m in plan["holdings_check"]["mismatches"]])
 
+    # -- one order, two shapes ---------------------------------------------
+
+    # The connector lists an order's executions; the Activity Statement prints
+    # the same order as one line at the average price.
+    GNTX_CONNECTOR = (
+        "trade_id,trade_time,symbol,company_name,sec_type,side,size,price,commission,currency\n"
+        "00012980.6b000001.01.01,2026-10-09T13:30:01Z,GNTX,GENTEX CORP,STK,BUY,3.0,21.2,0.640509,USD\n"
+        "00012980.6b000002.01.01,2026-10-09T13:30:01Z,GNTX,GENTEX CORP,STK,BUY,0.1124,21.35,0.023998,USD\n"
+    )
+
+    @staticmethod
+    def _gntx_statement():
+        return ("Statement,Header,Field Name,Field Value\n"
+                "Statement,Data,Title,Activity Statement\n"
+                'Statement,Data,Period,"October 1, 2026 - October 30, 2026"\n'
+                'Statement,Data,WhenGenerated,"2026-11-03, 07:09:46 AEDT"\n'
+                "Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,"
+                "Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code\n"
+                'Trades,Data,Order,Stocks,USD,GNTX,"2026-10-10, 00:30:01",3.1124,21.205417,21.3,'
+                "-66,-0.664506737,66.66,0,0,O\n")
+
+    def test_a_statement_order_line_matches_the_connector_executions(self):
+        self.apply(self.GNTX_CONNECTOR)
+        plan = self.preview(self._gntx_statement())
+        self.assertEqual((plan["fills_new"], plan["fills_known"]), (0, 1))
+        self.apply(self._gntx_statement())
+        self.assertAlmostEqual(self.trades()["GNTX"]["shares"], 3.1124)
+
+    def test_connector_executions_match_a_statement_order_line(self):
+        self.apply(self._gntx_statement())
+        plan = self.preview(self.GNTX_CONNECTOR)
+        self.assertEqual((plan["fills_new"], plan["fills_known"]), (0, 2))
+        self.apply(self.GNTX_CONNECTOR)
+        self.assertAlmostEqual(self.trades()["GNTX"]["shares"], 3.1124)
+
+    def _double_gntx(self):
+        """The state an older importer left: executions plus the order line."""
+        self.apply(self.GNTX_CONNECTOR)
+        tid = self.trades()["GNTX"]["id"]
+        with dbmod.get_db() as db:
+            db.execute(
+                "INSERT INTO trade_fills (trade_id, fill_key, position_key, ticker, "
+                "trade_date, side, qty, price, commission, currency, source, imported_at) "
+                "VALUES (?, 'ibkr:GNTX|2026-10-10|BUY|3.12400000|21.20541700|0', "
+                "'GNTX|2026-10-09', 'GNTX', '2026-10-10', 'BUY', 3.1124, 21.205417, "
+                "0.664506737, 'USD', 'ibkr', '2026-11-02T18:01:15')", (tid,))
+            db.execute("UPDATE trades SET shares=6.2248 WHERE id=?", (tid,))
+        return tid
+
+    def test_a_doubled_order_already_in_the_ledger_is_put_right(self):
+        self._double_gntx()
+        plan = self.preview(self._gntx_statement())
+        gntx = self.action(plan, "GNTX")
+        self.assertEqual(gntx["action"], "update")
+        self.assertAlmostEqual(gntx["targets"][0]["derived"]["shares"], 3.1124)
+        self.assertEqual([(d["ticker"], d["qty"]) for d in plan["ledger_dupes"]],
+                         [("GNTX", 3.1124)])
+        result = self.apply(self._gntx_statement())
+        self.assertEqual(result["fills_removed"], 1)
+        self.assertAlmostEqual(self.trades()["GNTX"]["shares"], 3.1124)
+        again = self.preview(self._gntx_statement())
+        self.assertEqual(again["ledger_dupes"], [])
+        self.assertEqual(again["fills_new"], 0)
+
+    def test_unticking_the_fix_keeps_the_duplicate(self):
+        self._double_gntx()
+        result = self.apply(self._gntx_statement(), accept=[])
+        self.assertEqual(result["fills_removed"], 0)
+        self.assertAlmostEqual(self.trades()["GNTX"]["shares"], 6.2248)
+
+    def test_fills_missing_behind_a_correct_row_are_filed(self):
+        # A row that's right but whose ledger was lost (a delete cascaded it).
+        self.apply(self.GNTX_CONNECTOR)
+        with dbmod.get_db() as db:
+            db.execute("DELETE FROM trade_fills WHERE ticker='GNTX'")
+        plan = self.preview(self._gntx_statement())
+        gntx = self.action(plan, "GNTX")
+        self.assertEqual(gntx["action"], "skip")
+        self.assertTrue(gntx["files_only"])
+        self.assertEqual(plan["fills_new"], 1)
+        result = self.apply(self._gntx_statement(), accept=[])
+        self.assertEqual((result["created"], result["updated"], result["fills_added"]), (0, 0, 1))
+        self.assertEqual(self.preview(self._gntx_statement())["fills_new"], 0)
+        self.assertEqual(len(self.all_trades()), 1)
+
     # -- selective apply --------------------------------------------------
 
     def test_accept_list_limits_what_is_written(self):
